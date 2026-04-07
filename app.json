@@ -5,7 +5,9 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.adegamanager.app"
@@ -14,7 +16,10 @@
       "package": "com.adegamanager.app",
       "adaptiveIcon": {
         "backgroundColor": "#722F37"
-      }
+      },
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "plugins": [
       "expo-router",
@@ -23,11 +28,20 @@
         {
           "photosPermission": "O aplicativo precisa acessar sua galeria para adicionar fotos dos produtos."
         }
-      ]
+      ],
+      "expo-font"
     ],
     "scheme": "adega-manager",
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "1877db64-201a-418a-9f39-2c6a1446c6f7"
+      }
     }
   }
 }
