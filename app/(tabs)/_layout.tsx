@@ -1,8 +1,6 @@
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-
-const WINE = '#722F37';
-const GRAY = '#8E8E93';
+import { useTheme, GOLD } from '../../src/theme';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -13,18 +11,20 @@ function icon(outline: IconName, filled: IconName) {
 }
 
 export default function TabLayout() {
+  const t = useTheme();
+
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: WINE,
-        tabBarInactiveTintColor: GRAY,
+        tabBarActiveTintColor: GOLD,
+        tabBarInactiveTintColor: t.sub,
         tabBarStyle: {
-          backgroundColor: '#FFFFFF',
-          borderTopColor: '#E5E5EA',
+          backgroundColor: t.tabBar,
+          borderTopColor: t.tabBorder,
         },
-        headerStyle: { backgroundColor: WINE },
-        headerTintColor: '#FFFFFF',
-        headerTitleStyle: { fontWeight: 'bold' },
+        headerStyle: { backgroundColor: t.headerBg },
+        headerTintColor: t.headerText,
+        headerTitleStyle: { fontWeight: 'bold', color: GOLD },
       }}
     >
       <Tabs.Screen
@@ -60,6 +60,13 @@ export default function TabLayout() {
         options={{
           title: 'Baixa',
           tabBarIcon: icon('arrow-up-circle-outline', 'arrow-up-circle'),
+        }}
+      />
+      <Tabs.Screen
+        name="relatorio"
+        options={{
+          title: 'Relatório',
+          tabBarIcon: icon('receipt-outline', 'receipt'),
         }}
       />
     </Tabs>

@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, Modal, TextInput,
   Image, StyleSheet, Alert, ActivityIndicator,
@@ -10,17 +10,19 @@ import {
   getShoppingList, getProducts, addToShoppingList,
   removeFromShoppingList, Product, ShoppingListItem,
 } from '../../src/database/db';
-
-const WINE = '#722F37';
+import { useTheme, GOLD, Theme } from '../../src/theme';
 
 export default function ListaScreen() {
-  const [list, setList]           = useState<ShoppingListItem[]>([]);
-  const [products, setProducts]   = useState<Product[]>([]);
-  const [loading, setLoading]     = useState(true);
-  const [modal, setModal]         = useState(false);
-  const [selected, setSelected]   = useState<Product | null>(null);
-  const [quantity, setQuantity]   = useState('');
-  const [search, setSearch]       = useState('');
+  const t = useTheme();
+  const s = useMemo(() => makeStyles(t), [t]);
+
+  const [list, setList]         = useState<ShoppingListItem[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loading, setLoading]   = useState(true);
+  const [modal, setModal]       = useState(false);
+  const [selected, setSelected] = useState<Product | null>(null);
+  const [quantity, setQuantity] = useState('');
+  const [search, setSearch]     = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -33,13 +35,6 @@ export default function ListaScreen() {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  const openModal = () => {
-    setSelected(null);
-    setQuantity('');
-    setSearch('');
-    setModal(true);
-  };
-
   const handleAdd = async () => {
     if (!selected) { Alert.alert('Atenção', 'Selecione um produto.'); return; }
     const qty = parseFloat(quantity);
@@ -50,25 +45,21 @@ export default function ListaScreen() {
   };
 
   const handleRemove = (item: ShoppingListItem) => {
-    Alert.alert(
-      'Remover',
-      `Remover "${item.product_name}" da lista?`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        { text: 'Remover', style: 'destructive',
-          onPress: async () => { await removeFromShoppingList(item.id); await load(); } },
-      ]
-    );
+    Alert.alert('Remover', `Remover "${item.product_name}" da lista?`, [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Remover', style: 'destructive',
+        onPress: async () => { await removeFromShoppingList(item.id); await load(); } },
+    ]);
   };
 
   const filteredProducts = products.filter(p =>
-    p.name.toLowerCase().includes(search.toLowerCase())
+    p.name.toLowerCase().includes(search.toLowerCase()),
   );
 
   return (
     <SafeAreaView style={s.container} edges={['bottom']}>
       {loading ? (
-        <ActivityIndicator size="large" color={WINE} style={{ marginTop: 40 }} />
+        <ActivityIndicator size="large" color={GOLD} style={{ marginTop: 40 }} />
       ) : (
         <FlatList
           data={list}
@@ -80,7 +71,7 @@ export default function ListaScreen() {
                 <Image source={{ uri: item.product_image }} style={s.img} />
               ) : (
                 <View style={[s.img, s.imgPlaceholder]}>
-                  <Ionicons name="wine-outline" size={22} color="#CCC" />
+                  <Ionicons name="wine-outline" size={22} color={t.border} />
                 </View>
               )}
               <View style={s.cardInfo}>
@@ -88,13 +79,13 @@ export default function ListaScreen() {
                 <Text style={s.qty}>{item.quantity_desired} unidades</Text>
               </View>
               <TouchableOpacity onPress={() => handleRemove(item)} style={s.removeBtn}>
-                <Ionicons name="trash-outline" size={20} color="#E74C3C" />
+                <Ionicons name="trash-outline" size={20} color={t.danger} />
               </TouchableOpacity>
             </View>
           )}
           ListEmptyComponent={
             <View style={s.empty}>
-              <Ionicons name="list-outline" size={64} color="#DDD" />
+              <Ionicons name="list-outline" size={64} color={t.border} />
               <Text style={s.emptyText}>Lista vazia</Text>
               <Text style={s.emptyHint}>Toque em + para adicionar produtos</Text>
             </View>
@@ -102,29 +93,26 @@ export default function ListaScreen() {
         />
       )}
 
-      <TouchableOpacity style={s.fab} onPress={openModal}>
-        <Ionicons name="add" size={28} color="#FFF" />
+      <TouchableOpacity style={s.fab} onPress={() => { setSelected(null); setQuantity(''); setSearch(''); setModal(true); }}>
+        <Ionicons name="add" size={28} color="#000" />
       </TouchableOpacity>
 
-      {/* Modal — selecionar produto */}
       <Modal visible={modal} animationType="slide" transparent>
         <View style={s.overlay}>
           <View style={s.sheet}>
             <Text style={s.sheetTitle}>Adicionar à Lista</Text>
 
-            {/* Busca */}
             <View style={s.searchRow}>
-              <Ionicons name="search" size={16} color="#999" style={s.searchIcon} />
+              <Ionicons name="search" size={16} color={t.sub} style={{ marginRight: 6 }} />
               <TextInput
                 style={s.searchInput}
                 placeholder="Buscar produto…"
-                placeholderTextColor="#BBB"
+                placeholderTextColor={t.placeholder}
                 value={search}
                 onChangeText={setSearch}
               />
             </View>
 
-            {/* Lista de produtos */}
             <FlatList
               data={filteredProducts}
               keyExtractor={item => String(item.id)}
@@ -138,23 +126,22 @@ export default function ListaScreen() {
                     <Image source={{ uri: item.image_uri }} style={s.optImg} />
                   ) : (
                     <View style={[s.optImg, s.imgPlaceholder]}>
-                      <Ionicons name="wine-outline" size={14} color="#CCC" />
+                      <Ionicons name="wine-outline" size={14} color={t.border} />
                     </View>
                   )}
                   <Text style={s.optName}>{item.name}</Text>
                   {selected?.id === item.id && (
-                    <Ionicons name="checkmark-circle" size={20} color={WINE} />
+                    <Ionicons name="checkmark-circle" size={20} color={GOLD} />
                   )}
                 </TouchableOpacity>
               )}
               ListEmptyComponent={<Text style={s.noProducts}>Nenhum produto encontrado.</Text>}
             />
 
-            {/* Quantidade */}
             <TextInput
               style={s.input}
               placeholder="Quantidade"
-              placeholderTextColor="#BBB"
+              placeholderTextColor={t.placeholder}
               value={quantity}
               onChangeText={setQuantity}
               keyboardType="decimal-pad"
@@ -175,57 +162,59 @@ export default function ListaScreen() {
   );
 }
 
-const s = StyleSheet.create({
-  container:    { flex: 1, backgroundColor: '#F5F0EB' },
-  list:         { padding: 12, paddingBottom: 80 },
-  card: {
-    backgroundColor: '#FFF', borderRadius: 12, padding: 12,
-    marginBottom: 10, flexDirection: 'row', alignItems: 'center',
-    shadowColor: '#000', shadowOpacity: 0.06,
-    shadowOffset: { width: 0, height: 2 }, shadowRadius: 4, elevation: 2,
-  },
-  img:          { width: 48, height: 48, borderRadius: 8, marginRight: 12 },
-  imgPlaceholder: { backgroundColor: '#F0F0F0', alignItems: 'center', justifyContent: 'center' },
-  cardInfo:     { flex: 1 },
-  productName:  { fontSize: 15, fontWeight: '600', color: '#1A1A1A' },
-  qty:          { fontSize: 13, color: '#666', marginTop: 2 },
-  removeBtn:    { padding: 8 },
-  empty:        { alignItems: 'center', marginTop: 80, gap: 8 },
-  emptyText:    { fontSize: 16, color: '#999', fontWeight: '500' },
-  emptyHint:    { fontSize: 13, color: '#BBB' },
-  fab: {
-    position: 'absolute', right: 20, bottom: 20,
-    backgroundColor: WINE, width: 56, height: 56,
-    borderRadius: 28, alignItems: 'center', justifyContent: 'center',
-    elevation: 5, shadowColor: '#000', shadowOpacity: 0.25,
-    shadowOffset: { width: 0, height: 3 }, shadowRadius: 5,
-  },
-  overlay:      { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  sheet: {
-    backgroundColor: '#FFF', borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    padding: 20, paddingBottom: 40, maxHeight: '85%',
-  },
-  sheetTitle:   { fontSize: 18, fontWeight: 'bold', color: '#1A1A1A', marginBottom: 12 },
-  searchRow:    { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F5F5F5', borderRadius: 10, paddingHorizontal: 10, marginBottom: 8 },
-  searchIcon:   { marginRight: 6 },
-  searchInput:  { flex: 1, height: 40, fontSize: 15, color: '#1A1A1A' },
-  productList:  { maxHeight: 220, marginBottom: 12 },
-  productOption: {
-    flexDirection: 'row', alignItems: 'center', padding: 10,
-    borderRadius: 8, marginBottom: 4, backgroundColor: '#F9F9F9',
-  },
-  productOptionSelected: { backgroundColor: '#FFF3F3', borderWidth: 1, borderColor: WINE },
-  optImg:       { width: 32, height: 32, borderRadius: 6, marginRight: 10 },
-  optName:      { flex: 1, fontSize: 14, color: '#1A1A1A' },
-  noProducts:   { textAlign: 'center', color: '#BBB', padding: 12 },
-  input: {
-    borderWidth: 1, borderColor: '#DDD', borderRadius: 10,
-    padding: 12, fontSize: 16, color: '#1A1A1A', marginBottom: 16,
-  },
-  btnRow:       { flexDirection: 'row', gap: 12 },
-  btn:          { flex: 1, padding: 14, borderRadius: 10, alignItems: 'center' },
-  btnCancel:    { backgroundColor: '#F0F0F0' },
-  btnCancelText: { color: '#555', fontWeight: '600' },
-  btnSave:      { backgroundColor: WINE },
-  btnSaveText:  { color: '#FFF', fontWeight: '600' },
-});
+function makeStyles(t: Theme) {
+  return StyleSheet.create({
+    container:   { flex: 1, backgroundColor: t.bg },
+    list:        { padding: 12, paddingBottom: 80 },
+    card: {
+      backgroundColor: t.card, borderRadius: 12, padding: 12,
+      marginBottom: 10, flexDirection: 'row', alignItems: 'center',
+      borderWidth: 1, borderColor: t.border,
+    },
+    img:          { width: 48, height: 48, borderRadius: 8, marginRight: 12 },
+    imgPlaceholder: { backgroundColor: t.badge, alignItems: 'center', justifyContent: 'center' },
+    cardInfo:     { flex: 1 },
+    productName:  { fontSize: 15, fontWeight: '600', color: t.text },
+    qty:          { fontSize: 13, color: t.sub, marginTop: 2 },
+    removeBtn:    { padding: 8 },
+    empty:        { alignItems: 'center', marginTop: 80, gap: 8 },
+    emptyText:    { fontSize: 16, color: t.sub, fontWeight: '500' },
+    emptyHint:    { fontSize: 13, color: t.placeholder },
+    fab: {
+      position: 'absolute', right: 20, bottom: 20,
+      backgroundColor: GOLD, width: 56, height: 56,
+      borderRadius: 28, alignItems: 'center', justifyContent: 'center', elevation: 5,
+    },
+    overlay:      { flex: 1, backgroundColor: t.overlay, justifyContent: 'flex-end' },
+    sheet: {
+      backgroundColor: t.sheetBg, borderTopLeftRadius: 24, borderTopRightRadius: 24,
+      padding: 20, paddingBottom: 40, maxHeight: '85%',
+    },
+    sheetTitle:   { fontSize: 18, fontWeight: 'bold', color: t.text, marginBottom: 12 },
+    searchRow: {
+      flexDirection: 'row', alignItems: 'center',
+      backgroundColor: t.searchBg, borderRadius: 10,
+      paddingHorizontal: 10, marginBottom: 8,
+    },
+    searchInput:  { flex: 1, height: 40, fontSize: 15, color: t.text },
+    productList:  { maxHeight: 220, marginBottom: 12 },
+    productOption: {
+      flexDirection: 'row', alignItems: 'center', padding: 10,
+      borderRadius: 8, marginBottom: 4, backgroundColor: t.optionBg,
+    },
+    productOptionSelected: { backgroundColor: t.optionSelectedBg, borderWidth: 1, borderColor: GOLD },
+    optImg:       { width: 32, height: 32, borderRadius: 6, marginRight: 10 },
+    optName:      { flex: 1, fontSize: 14, color: t.text },
+    noProducts:   { textAlign: 'center', color: t.placeholder, padding: 12 },
+    input: {
+      borderWidth: 1, borderColor: t.border, borderRadius: 10, backgroundColor: t.inputBg,
+      padding: 12, fontSize: 16, color: t.text, marginBottom: 16,
+    },
+    btnRow:       { flexDirection: 'row', gap: 12 },
+    btn:          { flex: 1, padding: 14, borderRadius: 10, alignItems: 'center' },
+    btnCancel:    { backgroundColor: t.badge },
+    btnCancelText: { color: t.sub, fontWeight: '600' },
+    btnSave:      { backgroundColor: GOLD },
+    btnSaveText:  { color: '#000', fontWeight: '700' },
+  });
+}

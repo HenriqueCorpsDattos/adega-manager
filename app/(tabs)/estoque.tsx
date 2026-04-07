@@ -1,118 +1,138 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import { View, Text, FlatList, Image, StyleSheet, ActivityIndicator } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { getStockInfo, StockInfo } from '../../src/database/db';
+import { getStockLots, StockLot } from '../../src/database/db';
+import { useTheme, GOLD, Theme } from '../../src/theme';
 
-const WINE = '#722F37';
+const fmt = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+const fmtDate = (d: string) => new Date(d).toLocaleDateString('pt-BR');
 
-function fmt(value: number) {
-  return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+interface ProductGroup {
+  product_id: number;
+  product_name: string;
+  product_image: string | null;
+  lots: StockLot[];
+  total_qty: number;
+  total_value: number;
+}
+
+function groupLots(lots: StockLot[]): ProductGroup[] {
+  const map = new Map<number, ProductGroup>();
+  for (const lot of lots) {
+    if (!map.has(lot.product_id)) {
+      map.set(lot.product_id, {
+        product_id:    lot.product_id,
+        product_name:  lot.product_name,
+        product_image: lot.product_image,
+        lots: [],
+        total_qty:   0,
+        total_value: 0,
+      });
+    }
+    const g = map.get(lot.product_id)!;
+    g.lots.push(lot);
+    g.total_qty   += lot.remaining_quantity;
+    g.total_value += lot.sale_price * lot.remaining_quantity;
+  }
+  return Array.from(map.values());
 }
 
 export default function EstoqueScreen() {
-  const [stock, setStock]   = useState<StockInfo[]>([]);
+  const t = useTheme();
+  const s = useMemo(() => makeStyles(t), [t]);
+
+  const [groups, setGroups]   = useState<ProductGroup[]>([]);
   const [loading, setLoading] = useState(true);
 
   useFocusEffect(useCallback(() => {
     const load = async () => {
       setLoading(true);
-      try { setStock(await getStockInfo()); }
-      finally { setLoading(false); }
+      try {
+        const lots = await getStockLots();
+        setGroups(groupLots(lots));
+      } finally { setLoading(false); }
     };
     load();
   }, []));
 
-  // Valor total do estoque (preço de venda × quantidade)
-  const totalValue = stock.reduce((sum, item) => {
-    if (!item.last_purchase_price || !item.last_margin_pct) return sum;
-    const salePrice = item.last_purchase_price * (1 + item.last_margin_pct / 100);
-    return sum + salePrice * item.total_quantity;
-  }, 0);
-
-  const renderItem = ({ item }: { item: StockInfo }) => {
-    const salePrice = item.last_purchase_price != null && item.last_margin_pct != null
-      ? item.last_purchase_price * (1 + item.last_margin_pct / 100)
-      : null;
-    const stockValue = salePrice != null
-      ? salePrice * item.total_quantity
-      : null;
-
-    return (
-      <View style={s.card}>
-        {/* Imagem + nome */}
-        <View style={s.cardTop}>
-          {item.product_image ? (
-            <Image source={{ uri: item.product_image }} style={s.img} />
-          ) : (
-            <View style={[s.img, s.imgPlaceholder]}>
-              <Ionicons name="wine-outline" size={24} color="#CCC" />
-            </View>
-          )}
-          <View style={s.cardInfo}>
-            <Text style={s.productName}>{item.product_name}</Text>
-            <View style={s.stockBadge}>
-              <Text style={[s.stockBadgeText, item.total_quantity <= 0 && s.outOfStock]}>
-                {item.total_quantity} un em estoque
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Preços */}
-        {item.last_purchase_price != null ? (
-          <View style={s.priceRow}>
-            <View style={s.priceCol}>
-              <Text style={s.priceLabel}>Compra</Text>
-              <Text style={s.priceValue}>{fmt(item.last_purchase_price)}</Text>
-            </View>
-            <View style={s.priceCol}>
-              <Text style={s.priceLabel}>Margem</Text>
-              <Text style={s.priceValue}>{item.last_margin_pct?.toFixed(1)}%</Text>
-            </View>
-            <View style={s.priceCol}>
-              <Text style={s.priceLabel}>Venda</Text>
-              <Text style={[s.priceValue, s.priceGreen]}>
-                {salePrice != null ? fmt(salePrice) : '—'}
-              </Text>
-            </View>
-            <View style={s.priceCol}>
-              <Text style={s.priceLabel}>Val. estoque</Text>
-              <Text style={[s.priceValue, s.priceWine]}>
-                {stockValue != null ? fmt(stockValue) : '—'}
-              </Text>
-            </View>
-          </View>
-        ) : (
-          <Text style={s.noEntry}>Sem entradas registradas</Text>
-        )}
-      </View>
-    );
-  };
+  const totalGlobal = groups.reduce((s, g) => s + g.total_value, 0);
 
   return (
     <SafeAreaView style={s.container} edges={['bottom']}>
       {loading ? (
-        <ActivityIndicator size="large" color={WINE} style={{ marginTop: 40 }} />
+        <ActivityIndicator size="large" color={GOLD} style={{ marginTop: 40 }} />
       ) : (
         <FlatList
-          data={stock}
-          keyExtractor={item => String(item.product_id)}
+          data={groups}
+          keyExtractor={g => String(g.product_id)}
           contentContainerStyle={s.list}
           ListHeaderComponent={
-            stock.length > 0 ? (
+            groups.length > 0 ? (
               <View style={s.summary}>
-                <Text style={s.summaryLabel}>Valor total em estoque (venda)</Text>
-                <Text style={s.summaryValue}>{fmt(totalValue)}</Text>
+                <Text style={s.summaryLabel}>Valor total em estoque</Text>
+                <Text style={s.summaryValue}>{fmt(totalGlobal)}</Text>
               </View>
             ) : null
           }
-          renderItem={renderItem}
+          renderItem={({ item: g }) => (
+            <View style={s.productCard}>
+              {/* Cabeçalho do produto */}
+              <View style={s.productHeader}>
+                {g.product_image ? (
+                  <Image source={{ uri: g.product_image }} style={s.img} />
+                ) : (
+                  <View style={[s.img, s.imgPlaceholder]}>
+                    <Ionicons name="wine-outline" size={20} color={t.border} />
+                  </View>
+                )}
+                <View style={s.productHeaderInfo}>
+                  <Text style={s.productName}>{g.product_name}</Text>
+                  <Text style={s.productTotals}>
+                    {g.total_qty} un · {fmt(g.total_value)}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Lotes */}
+              {g.lots.map((lot, i) => (
+                <View key={lot.entry_id} style={[s.lot, i === 0 && s.lotFirst]}>
+                  <View style={s.lotHeader}>
+                    <View style={s.lotBadge}>
+                      <Text style={s.lotBadgeText}>Lote {fmtDate(lot.entry_date)}</Text>
+                    </View>
+                    <Text style={s.lotQty}>{lot.remaining_quantity} un</Text>
+                  </View>
+                  <View style={s.lotPrices}>
+                    <View style={s.priceCol}>
+                      <Text style={s.priceLabel}>Compra</Text>
+                      <Text style={s.priceVal}>{fmt(lot.purchase_price)}</Text>
+                    </View>
+                    <View style={s.priceCol}>
+                      <Text style={s.priceLabel}>Margem</Text>
+                      <Text style={s.priceVal}>{lot.margin_pct.toFixed(1)}%</Text>
+                    </View>
+                    <View style={s.priceCol}>
+                      <Text style={s.priceLabel}>Venda</Text>
+                      <Text style={[s.priceVal, s.priceGold]}>{fmt(lot.sale_price)}</Text>
+                    </View>
+                    <View style={s.priceCol}>
+                      <Text style={s.priceLabel}>Val. lote</Text>
+                      <Text style={[s.priceVal, s.priceGold]}>
+                        {fmt(lot.sale_price * lot.remaining_quantity)}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
           ListEmptyComponent={
             <View style={s.empty}>
-              <Ionicons name="bar-chart-outline" size={64} color="#DDD" />
-              <Text style={s.emptyText}>Nenhum produto no estoque</Text>
+              <Ionicons name="bar-chart-outline" size={64} color={t.border} />
+              <Text style={s.emptyText}>Estoque vazio</Text>
+              <Text style={s.emptyHint}>Registre uma entrada primeiro</Text>
             </View>
           }
         />
@@ -121,39 +141,47 @@ export default function EstoqueScreen() {
   );
 }
 
-const s = StyleSheet.create({
-  container:  { flex: 1, backgroundColor: '#F5F0EB' },
-  list:       { padding: 12 },
-  summary: {
-    backgroundColor: WINE, borderRadius: 12, padding: 16,
-    alignItems: 'center', marginBottom: 12,
-  },
-  summaryLabel: { color: 'rgba(255,255,255,0.8)', fontSize: 13 },
-  summaryValue: { color: '#FFF', fontSize: 26, fontWeight: 'bold', marginTop: 2 },
-  card: {
-    backgroundColor: '#FFF', borderRadius: 12, padding: 14,
-    marginBottom: 10,
-    shadowColor: '#000', shadowOpacity: 0.06,
-    shadowOffset: { width: 0, height: 2 }, shadowRadius: 4, elevation: 2,
-  },
-  cardTop:    { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
-  img:        { width: 56, height: 56, borderRadius: 8, marginRight: 12 },
-  imgPlaceholder: { backgroundColor: '#F0F0F0', alignItems: 'center', justifyContent: 'center' },
-  cardInfo:   { flex: 1 },
-  productName: { fontSize: 15, fontWeight: '700', color: '#1A1A1A', marginBottom: 4 },
-  stockBadge: {
-    alignSelf: 'flex-start', backgroundColor: '#F5F0EB',
-    borderRadius: 8, paddingHorizontal: 8, paddingVertical: 2,
-  },
-  stockBadgeText: { fontSize: 12, color: '#555', fontWeight: '600' },
-  outOfStock: { color: '#E74C3C' },
-  priceRow:   { flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#F0F0F0', paddingTop: 10 },
-  priceCol:   { flex: 1, alignItems: 'center' },
-  priceLabel: { fontSize: 11, color: '#999', marginBottom: 2 },
-  priceValue: { fontSize: 13, fontWeight: '600', color: '#1A1A1A' },
-  priceGreen: { color: '#27AE60' },
-  priceWine:  { color: WINE },
-  noEntry:    { fontSize: 13, color: '#BBB', fontStyle: 'italic' },
-  empty:      { alignItems: 'center', marginTop: 80, gap: 8 },
-  emptyText:  { fontSize: 16, color: '#999', fontWeight: '500' },
-});
+function makeStyles(t: Theme) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: t.bg },
+    list:      { padding: 12 },
+    summary: {
+      backgroundColor: '#0A0A0A', borderRadius: 12, padding: 16,
+      alignItems: 'center', marginBottom: 12,
+      borderWidth: 1, borderColor: GOLD,
+    },
+    summaryLabel: { color: 'rgba(201,168,76,0.8)', fontSize: 13 },
+    summaryValue: { color: GOLD, fontSize: 26, fontWeight: 'bold', marginTop: 2 },
+    productCard: {
+      backgroundColor: t.card, borderRadius: 12, marginBottom: 12,
+      borderWidth: 1, borderColor: t.border, overflow: 'hidden',
+    },
+    productHeader: {
+      flexDirection: 'row', alignItems: 'center',
+      padding: 12, borderBottomWidth: 1, borderBottomColor: t.border,
+    },
+    img:          { width: 48, height: 48, borderRadius: 8, marginRight: 12 },
+    imgPlaceholder: { backgroundColor: t.badge, alignItems: 'center', justifyContent: 'center' },
+    productHeaderInfo: { flex: 1 },
+    productName:  { fontSize: 15, fontWeight: '700', color: t.text },
+    productTotals: { fontSize: 12, color: GOLD, fontWeight: '600', marginTop: 2 },
+    lot:          { padding: 12, borderTopWidth: 1, borderTopColor: t.border },
+    lotFirst:     { borderTopWidth: 0 },
+    lotHeader:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+    lotBadge: {
+      backgroundColor: t.badge, borderRadius: 6,
+      paddingHorizontal: 8, paddingVertical: 3,
+      borderWidth: 1, borderColor: t.border,
+    },
+    lotBadgeText: { fontSize: 11, color: t.sub, fontWeight: '600' },
+    lotQty:       { fontSize: 13, fontWeight: '700', color: t.text },
+    lotPrices:    { flexDirection: 'row' },
+    priceCol:     { flex: 1, alignItems: 'center' },
+    priceLabel:   { fontSize: 10, color: t.sub, marginBottom: 2 },
+    priceVal:     { fontSize: 12, fontWeight: '600', color: t.text },
+    priceGold:    { color: GOLD },
+    empty:        { alignItems: 'center', marginTop: 80, gap: 8 },
+    emptyText:    { fontSize: 16, color: t.sub, fontWeight: '500' },
+    emptyHint:    { fontSize: 13, color: t.placeholder },
+  });
+}
