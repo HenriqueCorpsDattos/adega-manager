@@ -1,0 +1,34 @@
+{
+  "expo": {
+    "name": "Adega Manager",
+    "slug": "adega-manager",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.adegamanager.app"
+    },
+    "android": {
+      "package": "com.adegamanager.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#722F37"
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "O aplicativo precisa acessar sua galeria para adicionar fotos dos produtos."
+        }
+      ]
+    ],
+    "scheme": "adega-manager",
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
