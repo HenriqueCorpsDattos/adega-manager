@@ -370,36 +370,19 @@ export async function confirmOrder(
     );
   }
 
-  // Auto-add to shopping list for products with renews_stock = 1 that hit 0 stock
+  // Auto-add to shopping list for products with renews_stock = 1 (immediately, any quantity)
   for (const item of items) {
-    const remaining = await getRemainingQtyForProduct(db, item.product_id);
-    if (remaining <= 0) {
-      const product = await db.getFirstAsync<{ renews_stock: number }>(
-        'SELECT renews_stock FROM products WHERE id = ?', [item.product_id],
-      );
-      if (product?.renews_stock === 1) {
-        await addToShoppingList(item.product_id, item.quantity);
-      }
+    const product = await db.getFirstAsync<{ renews_stock: number }>(
+      'SELECT renews_stock FROM products WHERE id = ?', [item.product_id],
+    );
+    if (product?.renews_stock === 1) {
+      await addToShoppingList(item.product_id, item.quantity);
     }
   }
 
   return orderId;
 }
 
-async function getRemainingQtyForProduct(
-  db: SQLite.SQLiteDatabase,
-  productId: number,
-): Promise<number> {
-  const row = await db.getFirstAsync<{ qty: number }>(`
-    SELECT COALESCE(SUM(
-      se.quantity - COALESCE((
-        SELECT SUM(oi.quantity) FROM order_items oi WHERE oi.entry_id = se.id
-      ), 0)
-    ), 0) AS qty
-    FROM stock_entries se WHERE se.product_id = ?
-  `, [productId]);
-  return row?.qty ?? 0;
-}
 
 export async function getOrders(): Promise<Order[]> {
   const db = await getDatabase();
