@@ -29,7 +29,8 @@
           "photosPermission": "O aplicativo precisa acessar sua galeria para adicionar fotos dos produtos."
         }
       ],
-      "expo-font"
+      "expo-font",
+      "expo-asset"
     ],
     "scheme": "adega-manager",
     "experiments": {
