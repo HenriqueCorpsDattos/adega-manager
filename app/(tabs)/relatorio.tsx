@@ -44,6 +44,10 @@ export default function RelatorioScreen() {
   const [monthlyPeriods, setMonthlyPeriods] = useState<ReportPeriod[]>([]);
   const [monthlyLoaded, setMonthlyLoaded]   = useState(false);
 
+  const [historyPeriodModal, setHistoryPeriodModal]       = useState(false);
+  const [selectedHistoryPeriod, setSelectedHistoryPeriod] = useState<ReportPeriod | null>(null);
+  const [historyPeriodOrders, setHistoryPeriodOrders]     = useState<Order[]>([]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -99,6 +103,12 @@ export default function RelatorioScreen() {
     const result = await getClosedPeriodsByMonth(y, m);
     setMonthlyPeriods(result);
     setMonthlyLoaded(true);
+  };
+
+  const openHistoryPeriod = async (p: ReportPeriod) => {
+    setSelectedHistoryPeriod(p);
+    setHistoryPeriodOrders(await getOrdersForPeriod(p.id));
+    setHistoryPeriodModal(true);
   };
 
   const monthlyTotal  = monthlyPeriods.reduce((s, p) => s + (p.total_value ?? 0), 0);
@@ -194,7 +204,7 @@ export default function RelatorioScreen() {
           keyExtractor={p => String(p.id)}
           contentContainerStyle={s.list}
           renderItem={({ item: p }) => (
-            <View style={s.historyCard}>
+            <TouchableOpacity style={s.historyCard} onPress={() => openHistoryPeriod(p)}>
               <View style={{ flex: 1 }}>
                 <Text style={s.historyDates}>
                   {fmtDate(p.started_at)} → {p.closed_at ? fmtDate(p.closed_at) : '—'}
@@ -206,7 +216,8 @@ export default function RelatorioScreen() {
                   </Text>
                 </View>
               </View>
-            </View>
+              <Ionicons name="chevron-forward" size={16} color={t.sub} />
+            </TouchableOpacity>
           )}
           ListEmptyComponent={
             <View style={s.empty}>
@@ -270,7 +281,7 @@ export default function RelatorioScreen() {
                 </View>
               ) : (
                 monthlyPeriods.map(p => (
-                  <View key={p.id} style={s.historyCard}>
+                  <TouchableOpacity key={p.id} style={s.historyCard} onPress={() => openHistoryPeriod(p)}>
                     <View style={{ flex: 1 }}>
                       <Text style={s.historyDates}>
                         {fmtDate(p.started_at)} → {p.closed_at ? fmtDate(p.closed_at) : '—'}
@@ -282,13 +293,71 @@ export default function RelatorioScreen() {
                         </Text>
                       </View>
                     </View>
-                  </View>
+                    <Ionicons name="chevron-forward" size={16} color={t.sub} />
+                  </TouchableOpacity>
                 ))
               )}
             </>
           )}
         </ScrollView>
       )}
+
+      {/* ── History period orders modal ── */}
+      <Modal visible={historyPeriodModal} animationType="slide" transparent>
+        <View style={s.overlay}>
+          <View style={[s.sheet, { maxHeight: '85%' }]}>
+            <View style={s.detailHeader}>
+              <View>
+                <Text style={s.sheetTitle}>
+                  {selectedHistoryPeriod ? fmtDate(selectedHistoryPeriod.started_at) : ''}{' '}→{' '}
+                  {selectedHistoryPeriod?.closed_at ? fmtDate(selectedHistoryPeriod.closed_at) : '—'}
+                </Text>
+                <Text style={s.detailMeta}>
+                  Bruto: {fmt(selectedHistoryPeriod?.total_value ?? 0)}
+                  {' · '}Lucro: {fmt(selectedHistoryPeriod?.profit ?? 0)}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setHistoryPeriodModal(false)}>
+                <Ionicons name="close" size={24} color={t.text} />
+              </TouchableOpacity>
+            </View>
+
+            {historyPeriodOrders.length === 0 ? (
+              <View style={s.empty}>
+                <Ionicons name="receipt-outline" size={48} color={t.border} />
+                <Text style={s.emptyText}>Nenhum pedido neste período</Text>
+              </View>
+            ) : (
+              <ScrollView>
+                {historyPeriodOrders.map(order => (
+                  <TouchableOpacity
+                    key={order.id}
+                    style={s.orderCard}
+                    onPress={() => openOrderDetail(order)}
+                  >
+                    <View style={s.orderTop}>
+                      <View style={s.orderLeft}>
+                        <Text style={s.orderDate}>{fmtDateTime(order.created_at)}</Text>
+                        <Text style={s.orderMeta}>
+                          {order.item_count} item{order.item_count !== 1 ? 's' : ''}
+                          {order.payment_method_name ? ` · ${order.payment_method_name}` : ''}
+                        </Text>
+                      </View>
+                      <View style={s.orderRight}>
+                        <Text style={s.orderGross}>{fmt(order.total_value)}</Text>
+                        {order.fee_value > 0 && (
+                          <Text style={s.orderNet}>liq. {fmt(order.net_value)}</Text>
+                        )}
+                      </View>
+                      <Ionicons name="chevron-forward" size={16} color={t.sub} />
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
 
       {/* ── Order detail modal ── */}
       <Modal visible={detailModal} animationType="slide" transparent>
@@ -393,6 +462,7 @@ function makeStyles(t: Theme) {
     historyCard: {
       backgroundColor: t.card, borderRadius: 12, padding: 14,
       marginBottom: 8, borderWidth: 1, borderColor: t.border,
+      flexDirection: 'row', alignItems: 'center',
     },
     historyDates:   { fontSize: 14, fontWeight: '600', color: t.text, marginBottom: 4 },
     historyMetrics: { flexDirection: 'row', gap: 16 },
