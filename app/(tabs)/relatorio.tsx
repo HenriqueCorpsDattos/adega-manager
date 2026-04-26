@@ -373,7 +373,16 @@ export default function RelatorioScreen() {
       </Modal>
 
       {/* ── Order detail modal ── */}
-      <Modal visible={detailModal} animationType="slide" transparent>
+      <Modal
+        visible={detailModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => {
+          setDetailModal(false);
+          setDetailOrder(null);
+          setDetailItems([]);
+        }}
+      >
         <View style={s.overlay}>
           <View style={[s.sheet, { maxHeight: '85%' }]}>
             <View style={s.detailHeader}>
@@ -384,7 +393,11 @@ export default function RelatorioScreen() {
                   {detailOrder?.payment_method_name ? ` · ${detailOrder.payment_method_name}` : ''}
                 </Text>
               </View>
-              <TouchableOpacity onPress={() => setDetailModal(false)}>
+              <TouchableOpacity onPress={() => {
+                setDetailModal(false);
+                setDetailOrder(null);
+                setDetailItems([]);
+              }}>
                 <Ionicons name="close" size={24} color={t.text} />
               </TouchableOpacity>
             </View>
