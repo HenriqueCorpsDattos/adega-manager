@@ -303,7 +303,16 @@ export default function RelatorioScreen() {
       )}
 
       {/* ── History period orders modal ── */}
-      <Modal visible={historyPeriodModal} animationType="slide" transparent>
+      <Modal
+        visible={historyPeriodModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => {
+          setHistoryPeriodModal(false);
+          setSelectedHistoryPeriod(null);
+          setHistoryPeriodOrders([]);
+        }}
+      >
         <View style={s.overlay}>
           <View style={[s.sheet, { maxHeight: '85%' }]}>
             <View style={s.detailHeader}>
@@ -317,7 +326,11 @@ export default function RelatorioScreen() {
                   {' · '}Lucro: {fmt(selectedHistoryPeriod?.profit ?? 0)}
                 </Text>
               </View>
-              <TouchableOpacity onPress={() => setHistoryPeriodModal(false)}>
+              <TouchableOpacity onPress={() => {
+                setHistoryPeriodModal(false);
+                setSelectedHistoryPeriod(null);
+                setHistoryPeriodOrders([]);
+              }}>
                 <Ionicons name="close" size={24} color={t.text} />
               </TouchableOpacity>
             </View>
