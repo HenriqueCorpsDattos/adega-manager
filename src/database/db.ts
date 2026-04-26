@@ -530,11 +530,15 @@ export async function closePeriod(periodId: number) {
 
   const totals = await db.getFirstAsync<{ total_value: number; total_cost: number; total_fees: number }>(`
     SELECT
-      COALESCE(SUM(o.total_value), 0)              AS total_value,
-      COALESCE(SUM(oi.quantity * oi.purchase_price), 0) AS total_cost,
-      COALESCE(SUM(o.fee_value), 0)                AS total_fees
+      COALESCE(SUM(o.total_value), 0)         AS total_value,
+      COALESCE(SUM(oi_agg.total_cost), 0)     AS total_cost,
+      COALESCE(SUM(o.fee_value), 0)           AS total_fees
     FROM orders o
-    JOIN order_items oi ON oi.order_id = o.id
+    LEFT JOIN (
+      SELECT order_id, SUM(quantity * purchase_price) AS total_cost
+      FROM order_items
+      GROUP BY order_id
+    ) oi_agg ON oi_agg.order_id = o.id
     WHERE o.period_id = ?
   `, [periodId]);
 
