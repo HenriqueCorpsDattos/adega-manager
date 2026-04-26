@@ -354,8 +354,9 @@ export async function confirmOrder(
   }
 
   const totalValue = items.reduce((s, i) => s + i.unit_sale_price * i.quantity, 0);
+  const totalCost  = items.reduce((s, i) => s + i.purchase_price * i.quantity, 0);
   const feeValue   = totalValue * (feePct / 100);
-  const netValue   = totalValue - feeValue;
+  const netValue   = (totalValue - totalCost) - feeValue;
 
   const orderResult = await db.runAsync(
     'INSERT INTO orders (payment_method_id, period_id, total_value, fee_value, net_value, notes) VALUES (?, ?, ?, ?, ?, ?)',
@@ -527,10 +528,11 @@ export async function getCurrentPeriod(): Promise<ReportPeriod | null> {
 export async function closePeriod(periodId: number) {
   const db = await getDatabase();
 
-  const totals = await db.getFirstAsync<{ total_value: number; total_cost: number }>(`
+  const totals = await db.getFirstAsync<{ total_value: number; total_cost: number; total_fees: number }>(`
     SELECT
-      COALESCE(SUM(o.total_value), 0) AS total_value,
-      COALESCE(SUM(oi.quantity * oi.purchase_price), 0) AS total_cost
+      COALESCE(SUM(o.total_value), 0)              AS total_value,
+      COALESCE(SUM(oi.quantity * oi.purchase_price), 0) AS total_cost,
+      COALESCE(SUM(o.fee_value), 0)                AS total_fees
     FROM orders o
     JOIN order_items oi ON oi.order_id = o.id
     WHERE o.period_id = ?
@@ -538,7 +540,8 @@ export async function closePeriod(periodId: number) {
 
   const totalValue = totals?.total_value ?? 0;
   const totalCost  = totals?.total_cost ?? 0;
-  const profit     = totalValue - totalCost;
+  const totalFees  = totals?.total_fees ?? 0;
+  const profit     = totalValue - totalCost - totalFees;
 
   await db.runAsync(
     "UPDATE report_periods SET closed_at = datetime('now','localtime'), total_value = ?, total_cost = ?, profit = ? WHERE id = ?",
