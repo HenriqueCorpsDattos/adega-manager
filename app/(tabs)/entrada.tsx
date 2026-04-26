@@ -18,6 +18,7 @@ interface EntryItem {
   quantity:         string;
   purchase_price:   string;
   margin_pct:       string;
+  sale_price:       string;
   shopping_list_id: number | null;
 }
 
@@ -44,6 +45,7 @@ export default function EntradaScreen() {
         quantity:         String(li.quantity_desired),
         purchase_price:   '',
         margin_pct:       '',
+        sale_price:       '',
         shopping_list_id: li.id,
       })));
     } finally { setLoading(false); }
@@ -51,8 +53,40 @@ export default function EntradaScreen() {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  const update = (index: number, field: keyof EntryItem, value: string) =>
-    setItems(prev => prev.map((item, i) => i === index ? { ...item, [field]: value } : item));
+  const update = (index: number, field: keyof EntryItem, value: string) => {
+    setItems(prev => prev.map((item, i) => {
+      if (i !== index) return item;
+      const next = { ...item, [field]: value };
+      const price = parseFloat(next.purchase_price);
+
+      if (field === 'margin_pct') {
+        const margin = parseFloat(value);
+        next.sale_price = (price > 0 && !isNaN(margin))
+          ? (price * (1 + margin / 100)).toFixed(2)
+          : '';
+      }
+
+      if (field === 'sale_price') {
+        const sale = parseFloat(value);
+        next.margin_pct = (price > 0 && sale > 0)
+          ? (((sale / price) - 1) * 100).toFixed(2)
+          : '';
+      }
+
+      if (field === 'purchase_price') {
+        const newPrice = parseFloat(value);
+        const margin   = parseFloat(next.margin_pct);
+        const sale     = parseFloat(next.sale_price);
+        if (newPrice > 0 && !isNaN(margin) && next.margin_pct !== '') {
+          next.sale_price = (newPrice * (1 + margin / 100)).toFixed(2);
+        } else if (newPrice > 0 && sale > 0) {
+          next.margin_pct = (((sale / newPrice) - 1) * 100).toFixed(2);
+        }
+      }
+
+      return next;
+    }));
+  };
 
   const remove = (index: number) =>
     setItems(prev => prev.filter((_, i) => i !== index));
@@ -70,6 +104,7 @@ export default function EntradaScreen() {
       quantity:         '',
       purchase_price:   '',
       margin_pct:       '',
+      sale_price:       '',
       shopping_list_id: null,
     }]);
     setSelector(false);
@@ -109,13 +144,6 @@ export default function EntradaScreen() {
     ]);
   };
 
-  const salePreview = (item: EntryItem) => {
-    const price  = parseFloat(item.purchase_price);
-    const margin = parseFloat(item.margin_pct);
-    if (!price || isNaN(margin)) return null;
-    return (price * (1 + margin / 100)).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-  };
-
   const filteredProducts = products.filter(p =>
     p.name.toLowerCase().includes(search.toLowerCase()),
   );
@@ -133,9 +161,7 @@ export default function EntradaScreen() {
           </View>
         )}
 
-        {items.map((item, index) => {
-          const preview = salePreview(item);
-          return (
+        {items.map((item, index) => (
             <View key={`${item.product_id}-${index}`} style={s.card}>
               <View style={s.cardHeader}>
                 {item.product_image ? (
@@ -170,6 +196,19 @@ export default function EntradaScreen() {
                     />
                   </View>
                   <View style={s.field}>
+                    <Text style={s.fieldLabel}>Preço de Compra (R$)</Text>
+                    <TextInput
+                      style={s.fieldInput}
+                      value={item.purchase_price}
+                      onChangeText={v => update(index, 'purchase_price', v)}
+                      keyboardType="decimal-pad"
+                      placeholder="0,00"
+                      placeholderTextColor={t.placeholder}
+                    />
+                  </View>
+                </View>
+                <View style={s.fieldRow}>
+                  <View style={[s.field, { marginRight: 8 }]}>
                     <Text style={s.fieldLabel}>Margem (%)</Text>
                     <TextInput
                       style={s.fieldInput}
@@ -180,25 +219,21 @@ export default function EntradaScreen() {
                       placeholderTextColor={t.placeholder}
                     />
                   </View>
+                  <View style={s.field}>
+                    <Text style={s.fieldLabel}>Preço de Venda (R$)</Text>
+                    <TextInput
+                      style={s.fieldInput}
+                      value={item.sale_price}
+                      onChangeText={v => update(index, 'sale_price', v)}
+                      keyboardType="decimal-pad"
+                      placeholder="0,00"
+                      placeholderTextColor={t.placeholder}
+                    />
+                  </View>
                 </View>
-                <View style={s.field}>
-                  <Text style={s.fieldLabel}>Preço de Compra (R$)</Text>
-                  <TextInput
-                    style={s.fieldInput}
-                    value={item.purchase_price}
-                    onChangeText={v => update(index, 'purchase_price', v)}
-                    keyboardType="decimal-pad"
-                    placeholder="0,00"
-                    placeholderTextColor={t.placeholder}
-                  />
-                </View>
-                {preview && (
-                  <Text style={s.preview}>Preço de venda: {preview}</Text>
-                )}
               </View>
             </View>
-          );
-        })}
+        ))}
 
         <TouchableOpacity style={s.addBtn} onPress={() => { setSearch(''); setSelector(true); }}>
           <Ionicons name="add-circle-outline" size={20} color={GOLD} />
