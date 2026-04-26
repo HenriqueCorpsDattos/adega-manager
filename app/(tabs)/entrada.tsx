@@ -68,7 +68,7 @@ export default function EntradaScreen() {
 
       if (field === 'sale_price') {
         const sale = parseFloat(value);
-        next.margin_pct = (price > 0 && sale > 0)
+        next.margin_pct = (price > 0 && !isNaN(sale) && sale > 0)
           ? (((sale / price) - 1) * 100).toFixed(2)
           : '';
       }
@@ -319,7 +319,6 @@ function makeStyles(t: Theme) {
       borderWidth: 1, borderColor: t.border, borderRadius: 8, backgroundColor: t.inputBg,
       paddingHorizontal: 10, paddingVertical: 9, fontSize: 15, color: t.text,
     },
-    preview:     { fontSize: 13, color: GOLD, fontWeight: '600' },
     addBtn: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
       borderWidth: 1.5, borderColor: GOLD, borderStyle: 'dashed',
