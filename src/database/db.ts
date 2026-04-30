@@ -399,8 +399,9 @@ export async function getStockLots(): Promise<StockLot[]> {
       p.image_uri          AS product_image,
       se.quantity          AS original_quantity,
       (se.quantity
-        - COALESCE((SELECT SUM(oi.quantity) FROM order_items    oi WHERE oi.entry_id = se.id), 0)
-        - COALESCE((SELECT SUM(sw.quantity) FROM stock_writeoffs sw WHERE sw.entry_id = se.id), 0)
+        - COALESCE((SELECT SUM(oi.quantity) FROM order_items         oi WHERE oi.entry_id = se.id), 0)
+        - COALESCE((SELECT SUM(sw.quantity) FROM stock_writeoffs      sw WHERE sw.entry_id = se.id), 0)
+        - COALESCE((SELECT SUM(cd.quantity) FROM composite_deductions cd WHERE cd.entry_id = se.id), 0)
       )                    AS remaining_quantity,
       se.purchase_price,
       se.margin_pct,
@@ -423,13 +424,15 @@ export async function getStockSummary(): Promise<StockSummary[]> {
       p.image_uri                                 AS product_image,
       COALESCE(SUM(
         se.quantity
-        - COALESCE((SELECT SUM(oi.quantity) FROM order_items    oi WHERE oi.entry_id = se.id), 0)
-        - COALESCE((SELECT SUM(sw.quantity) FROM stock_writeoffs sw WHERE sw.entry_id = se.id), 0)
+        - COALESCE((SELECT SUM(oi.quantity) FROM order_items         oi WHERE oi.entry_id = se.id), 0)
+        - COALESCE((SELECT SUM(sw.quantity) FROM stock_writeoffs      sw WHERE sw.entry_id = se.id), 0)
+        - COALESCE((SELECT SUM(cd.quantity) FROM composite_deductions cd WHERE cd.entry_id = se.id), 0)
       ), 0)                                       AS total_quantity,
       COALESCE(SUM(
         (se.quantity
-          - COALESCE((SELECT SUM(oi.quantity) FROM order_items    oi WHERE oi.entry_id = se.id), 0)
-          - COALESCE((SELECT SUM(sw.quantity) FROM stock_writeoffs sw WHERE sw.entry_id = se.id), 0)
+          - COALESCE((SELECT SUM(oi.quantity) FROM order_items         oi WHERE oi.entry_id = se.id), 0)
+          - COALESCE((SELECT SUM(sw.quantity) FROM stock_writeoffs      sw WHERE sw.entry_id = se.id), 0)
+          - COALESCE((SELECT SUM(cd.quantity) FROM composite_deductions cd WHERE cd.entry_id = se.id), 0)
         ) * se.purchase_price
       ), 0)                                       AS total_investment
     FROM products p
@@ -507,8 +510,48 @@ export async function confirmOrder(
     feePct = pm?.fee_pct ?? 0;
   }
 
+  // Pré-calcula o custo FIFO por unidade de cada item composto
+  const compositePppu: number[] = new Array(items.length).fill(0);
+  for (let idx = 0; idx < items.length; idx++) {
+    const item = items[idx];
+    if (item.entry_id !== null) continue; // produto simples — pula
+    const ingredients = await db.getAllAsync<{ ingredient_id: number; quantity: number }>(
+      'SELECT ingredient_id, quantity FROM product_ingredients WHERE product_id = ?',
+      [item.product_id],
+    );
+    let totalCostForOrder = 0;
+    for (const ing of ingredients) {
+      const needed = ing.quantity * item.quantity;
+      const lots = await db.getAllAsync<{ id: number; available: number; purchase_price: number }>(
+        `SELECT se.id,
+           (se.quantity
+             - COALESCE((SELECT SUM(oi.quantity) FROM order_items         oi WHERE oi.entry_id = se.id), 0)
+             - COALESCE((SELECT SUM(sw.quantity) FROM stock_writeoffs      sw WHERE sw.entry_id = se.id), 0)
+             - COALESCE((SELECT SUM(cd.quantity) FROM composite_deductions cd WHERE cd.entry_id = se.id), 0)
+           ) AS available,
+           se.purchase_price
+         FROM stock_entries se
+         WHERE se.product_id = ?
+         ORDER BY se.entry_date ASC`,
+        [ing.ingredient_id],
+      );
+      let remaining = needed;
+      for (const lot of lots) {
+        if (remaining <= 0) break;
+        if (lot.available <= 0) continue;
+        const deduct = Math.min(remaining, lot.available);
+        totalCostForOrder += deduct * lot.purchase_price;
+        remaining -= deduct;
+      }
+    }
+    compositePppu[idx] = item.quantity > 0 ? totalCostForOrder / item.quantity : 0;
+  }
+
   const totalValue = items.reduce((s, i) => s + i.unit_sale_price * i.quantity, 0);
-  const totalCost  = items.reduce((s, i) => s + i.purchase_price * i.quantity, 0);
+  const totalCost  = items.reduce((s, i, idx) => {
+    const pp = i.entry_id !== null ? i.purchase_price : compositePppu[idx];
+    return s + pp * i.quantity;
+  }, 0);
   const feeValue   = totalValue * (feePct / 100);
   const netValue   = (totalValue - totalCost) - feeValue;
 
@@ -518,15 +561,54 @@ export async function confirmOrder(
   );
   const orderId = orderResult.lastInsertRowId;
 
-  for (const item of items) {
-    await db.runAsync(
+  for (let idx = 0; idx < items.length; idx++) {
+    const item = items[idx];
+    const purchasePrice = item.entry_id !== null ? item.purchase_price : compositePppu[idx];
+    const itemResult = await db.runAsync(
       'INSERT INTO order_items (order_id, product_id, entry_id, quantity, unit_sale_price, purchase_price, notes) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [orderId, item.product_id, item.entry_id, item.quantity, item.unit_sale_price, item.purchase_price, item.notes || null],
+      [orderId, item.product_id, item.entry_id, item.quantity, item.unit_sale_price, purchasePrice, item.notes || null],
     );
+    const orderItemId = itemResult.lastInsertRowId;
+
+    // Para compostos: deduções FIFO nos lotes dos ingredientes
+    if (item.entry_id === null) {
+      const ingredients = await db.getAllAsync<{ ingredient_id: number; quantity: number }>(
+        'SELECT ingredient_id, quantity FROM product_ingredients WHERE product_id = ?',
+        [item.product_id],
+      );
+      for (const ing of ingredients) {
+        const needed = ing.quantity * item.quantity;
+        const lots = await db.getAllAsync<{ id: number; available: number; purchase_price: number }>(
+          `SELECT se.id,
+             (se.quantity
+               - COALESCE((SELECT SUM(oi.quantity) FROM order_items         oi WHERE oi.entry_id = se.id), 0)
+               - COALESCE((SELECT SUM(sw.quantity) FROM stock_writeoffs      sw WHERE sw.entry_id = se.id), 0)
+               - COALESCE((SELECT SUM(cd.quantity) FROM composite_deductions cd WHERE cd.entry_id = se.id), 0)
+             ) AS available,
+             se.purchase_price
+           FROM stock_entries se
+           WHERE se.product_id = ?
+           ORDER BY se.entry_date ASC`,
+          [ing.ingredient_id],
+        );
+        let remaining = needed;
+        for (const lot of lots) {
+          if (remaining <= 0) break;
+          if (lot.available <= 0) continue;
+          const deduct = Math.min(remaining, lot.available);
+          await db.runAsync(
+            'INSERT INTO composite_deductions (order_id, order_item_id, entry_id, product_id, quantity, purchase_price) VALUES (?, ?, ?, ?, ?, ?)',
+            [orderId, orderItemId, lot.id, ing.ingredient_id, deduct, lot.purchase_price],
+          );
+          remaining -= deduct;
+        }
+      }
+    }
   }
 
-  // Auto-add to shopping list for products with renews_stock = 1 (immediately, any quantity)
+  // Auto-add to shopping list (apenas produtos simples com renews_stock)
   for (const item of items) {
+    if (item.entry_id === null) continue; // compostos não renovam estoque
     const product = await db.getFirstAsync<{ renews_stock: number }>(
       'SELECT renews_stock FROM products WHERE id = ?', [item.product_id],
     );
