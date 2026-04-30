@@ -1,13 +1,16 @@
 import React, { useState, useCallback, useMemo } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, Modal, TextInput,
-  Image, StyleSheet, Alert, ActivityIndicator, Switch,
+  Image, StyleSheet, Alert, ActivityIndicator, Switch, ScrollView,
 } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { getProducts, createProduct, updateProduct, deleteProduct, Product } from '../../src/database/db';
+import {
+  getProducts, createProduct, updateProduct, deleteProduct, Product,
+  getIngredients, saveIngredients, Ingredient,
+} from '../../src/database/db';
 import { useTheme, GOLD, Theme } from '../../src/theme';
 
 export default function ProdutosScreen() {
@@ -23,6 +26,16 @@ export default function ProdutosScreen() {
   const [renewsStock, setRenews]    = useState(false);
   const [saving, setSaving]         = useState(false);
 
+  // Composto
+  const [isComposite, setIsComposite]         = useState(false);
+  const [compositeSalePrice, setCompSalePrice] = useState('');
+  const [ingredients, setIngredients]         = useState<Ingredient[]>([]);
+
+  // Picker de ingrediente
+  const [ingPickerVisible, setIngPickerVisible] = useState(false);
+  const [ingPickerProduct, setIngPickerProduct] = useState<Product | null>(null);
+  const [ingPickerQty, setIngPickerQty]         = useState('');
+
   const load = useCallback(async () => {
     setLoading(true);
     try { setProducts(await getProducts()); }
@@ -32,10 +45,23 @@ export default function ProdutosScreen() {
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const openCreate = () => {
-    setEditing(null); setName(''); setImageUri(null); setRenews(false); setModal(true);
+    setEditing(null);
+    setName(''); setImageUri(null); setRenews(false);
+    setIsComposite(false); setCompSalePrice(''); setIngredients([]);
+    setModal(true);
   };
-  const openEdit = (p: Product) => {
-    setEditing(p); setName(p.name); setImageUri(p.image_uri); setRenews(p.renews_stock === 1); setModal(true);
+  const openEdit = async (p: Product) => {
+    setEditing(p);
+    setName(p.name); setImageUri(p.image_uri); setRenews(p.renews_stock === 1);
+    setIsComposite(p.is_composite === 1);
+    setCompSalePrice(p.composite_sale_price != null ? String(p.composite_sale_price) : '');
+    if (p.is_composite === 1) {
+      const ings = await getIngredients(p.id);
+      setIngredients(ings);
+    } else {
+      setIngredients([]);
+    }
+    setModal(true);
   };
 
   const pickImage = async () => {
@@ -48,10 +74,27 @@ export default function ProdutosScreen() {
 
   const handleSave = async () => {
     if (!name.trim()) { Alert.alert('Atenção', 'Informe o nome do produto.'); return; }
+    if (isComposite) {
+      const sp = parseFloat(compositeSalePrice);
+      if (!sp || sp <= 0) { Alert.alert('Atenção', 'Informe o preço de venda do composto.'); return; }
+      if (ingredients.length === 0) { Alert.alert('Atenção', 'Adicione ao menos um ingrediente.'); return; }
+    }
     setSaving(true);
     try {
-      if (editing) await updateProduct(editing.id, name.trim(), imageUri, renewsStock);
-      else         await createProduct(name.trim(), imageUri, renewsStock);
+      const sp = isComposite ? parseFloat(compositeSalePrice) : null;
+      let productId: number;
+      if (editing) {
+        await updateProduct(editing.id, name.trim(), imageUri, renewsStock, isComposite, sp);
+        productId = editing.id;
+      } else {
+        const result = await createProduct(name.trim(), imageUri, renewsStock, isComposite, sp);
+        productId = result.lastInsertRowId;
+      }
+      if (isComposite) {
+        await saveIngredients(productId, ingredients.map(i => ({ ingredientId: i.ingredient_id, quantity: i.quantity })));
+      } else {
+        await saveIngredients(productId, []); // remove ingredientes se produto deixou de ser composto
+      }
       setModal(false);
       await load();
     } finally { setSaving(false); }
@@ -89,6 +132,12 @@ export default function ProdutosScreen() {
                 <View style={s.renewsBadge}>
                   <Ionicons name="refresh" size={10} color={GOLD} />
                   <Text style={s.renewsText}>Renova estoque</Text>
+                </View>
+              )}
+              {item.is_composite === 1 && (
+                <View style={[s.renewsBadge, { borderColor: t.sub }]}>
+                  <Ionicons name="layers-outline" size={10} color={t.sub} />
+                  <Text style={[s.renewsText, { color: t.sub }]}>Composto</Text>
                 </View>
               )}
               <View style={s.cardActions}>
@@ -156,12 +205,133 @@ export default function ProdutosScreen() {
               />
             </View>
 
+            {/* Seção de produto composto */}
+            <View style={s.switchRow}>
+              <View style={s.switchInfo}>
+                <Text style={s.switchLabel}>É um produto composto?</Text>
+                <Text style={s.switchHint}>Combo que deduz estoque de outros produtos ao ser vendido</Text>
+              </View>
+              <Switch
+                value={isComposite}
+                onValueChange={v => { setIsComposite(v); if (!v) setIngredients([]); }}
+                trackColor={{ false: t.border, true: GOLD }}
+                thumbColor={isComposite ? '#000' : t.sub}
+              />
+            </View>
+
+            {isComposite && (
+              <>
+                <TextInput
+                  style={s.input}
+                  placeholder="Preço de venda (R$)"
+                  placeholderTextColor={t.placeholder}
+                  value={compositeSalePrice}
+                  onChangeText={setCompSalePrice}
+                  keyboardType="decimal-pad"
+                />
+
+                <Text style={s.ingTitle}>Ingredientes</Text>
+                {ingredients.map((ing, idx) => (
+                  <View key={idx} style={s.ingRow}>
+                    <Text style={s.ingName} numberOfLines={1}>{ing.ingredient_name}</Text>
+                    <Text style={s.ingQty}>{ing.quantity} un</Text>
+                    <TouchableOpacity onPress={() => setIngredients(prev => prev.filter((_, i) => i !== idx))}>
+                      <Ionicons name="close-circle" size={18} color={t.danger} />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+                <TouchableOpacity style={s.addIngBtn} onPress={() => {
+                  setIngPickerProduct(null); setIngPickerQty(''); setIngPickerVisible(true);
+                }}>
+                  <Ionicons name="add-circle-outline" size={16} color={GOLD} />
+                  <Text style={s.addIngBtnText}>Adicionar ingrediente</Text>
+                </TouchableOpacity>
+              </>
+            )}
+
             <View style={s.btnRow}>
               <TouchableOpacity style={[s.btn, s.btnCancel]} onPress={() => setModal(false)}>
                 <Text style={s.btnCancelText}>Cancelar</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[s.btn, s.btnSave]} onPress={handleSave} disabled={saving}>
                 <Text style={s.btnSaveText}>{saving ? 'Salvando…' : 'Salvar'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Picker de ingrediente ── */}
+      <Modal visible={ingPickerVisible} animationType="slide" transparent
+        onRequestClose={() => setIngPickerVisible(false)}
+      >
+        <View style={s.overlay}>
+          <View style={[s.sheet, { maxHeight: '75%' }]}>
+            <Text style={s.sheetTitle}>Adicionar Ingrediente</Text>
+
+            <Text style={[s.switchHint, { marginBottom: 8 }]}>Selecione um produto:</Text>
+            <ScrollView style={{ maxHeight: 220 }} showsVerticalScrollIndicator={false}>
+              {products
+                .filter(p => p.is_composite === 0 && p.id !== editing?.id)
+                .filter(p => !ingredients.some(i => i.ingredient_id === p.id))
+                .map(p => (
+                  <TouchableOpacity
+                    key={p.id}
+                    style={[s.ingPickerItem, ingPickerProduct?.id === p.id && s.ingPickerItemSelected]}
+                    onPress={() => setIngPickerProduct(p)}
+                  >
+                    {p.image_uri ? (
+                      <Image source={{ uri: p.image_uri }} style={s.ingPickerImg} />
+                    ) : (
+                      <View style={[s.ingPickerImg, { backgroundColor: t.badge, alignItems: 'center', justifyContent: 'center' }]}>
+                        <Ionicons name="wine-outline" size={14} color={t.border} />
+                      </View>
+                    )}
+                    <Text style={s.ingPickerName} numberOfLines={1}>{p.name}</Text>
+                    {ingPickerProduct?.id === p.id && (
+                      <Ionicons name="checkmark-circle" size={18} color={GOLD} />
+                    )}
+                  </TouchableOpacity>
+                ))
+              }
+            </ScrollView>
+
+            {ingPickerProduct && (
+              <>
+                <Text style={[s.switchHint, { marginTop: 12, marginBottom: 4 }]}>Quantidade por unidade do composto:</Text>
+                <TextInput
+                  style={s.input}
+                  placeholder="Ex: 2"
+                  placeholderTextColor={t.placeholder}
+                  value={ingPickerQty}
+                  onChangeText={setIngPickerQty}
+                  keyboardType="decimal-pad"
+                />
+              </>
+            )}
+
+            <View style={s.btnRow}>
+              <TouchableOpacity style={[s.btn, s.btnCancel]} onPress={() => setIngPickerVisible(false)}>
+                <Text style={s.btnCancelText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.btn, s.btnSave, (!ingPickerProduct || !ingPickerQty) && { opacity: 0.4 }]}
+                disabled={!ingPickerProduct || !ingPickerQty}
+                onPress={() => {
+                  const qty = parseFloat(ingPickerQty);
+                  if (!qty || qty <= 0) { Alert.alert('Atenção', 'Quantidade inválida.'); return; }
+                  if (!ingPickerProduct) return;
+                  setIngredients(prev => [...prev, {
+                    id: 0,
+                    product_id: editing?.id ?? 0,
+                    ingredient_id: ingPickerProduct.id,
+                    ingredient_name: ingPickerProduct.name,
+                    quantity: qty,
+                  }]);
+                  setIngPickerVisible(false);
+                }}
+              >
+                <Text style={s.btnSaveText}>Adicionar</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -232,5 +402,27 @@ function makeStyles(t: Theme) {
     btnCancelText: { color: t.sub, fontWeight: '600' },
     btnSave:      { backgroundColor: GOLD },
     btnSaveText:  { color: '#000', fontWeight: '700' },
+    ingTitle:     { fontSize: 13, fontWeight: '700', color: t.text, marginBottom: 8, marginTop: 4 },
+    ingRow: {
+      flexDirection: 'row', alignItems: 'center', gap: 8,
+      backgroundColor: t.badge, borderRadius: 8, padding: 8,
+      marginBottom: 6, borderWidth: 1, borderColor: t.border,
+    },
+    ingName:      { flex: 1, fontSize: 13, color: t.text, fontWeight: '500' },
+    ingQty:       { fontSize: 13, color: t.sub },
+    addIngBtn: {
+      flexDirection: 'row', alignItems: 'center', gap: 6,
+      padding: 10, borderRadius: 8, borderWidth: 1,
+      borderColor: GOLD, borderStyle: 'dashed', marginBottom: 16, justifyContent: 'center',
+    },
+    addIngBtnText: { fontSize: 13, color: GOLD, fontWeight: '600' },
+    ingPickerItem: {
+      flexDirection: 'row', alignItems: 'center', gap: 10, padding: 10,
+      borderRadius: 8, marginBottom: 4, backgroundColor: t.badge,
+      borderWidth: 1, borderColor: t.border,
+    },
+    ingPickerItemSelected: { borderColor: GOLD, backgroundColor: t.optionSelectedBg },
+    ingPickerImg:  { width: 32, height: 32, borderRadius: 6 },
+    ingPickerName: { flex: 1, fontSize: 13, color: t.text, fontWeight: '500' },
   });
 }
