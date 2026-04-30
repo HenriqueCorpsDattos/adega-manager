@@ -213,6 +213,30 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       FOREIGN KEY (entry_id)   REFERENCES stock_entries(id) ON DELETE CASCADE,
       FOREIGN KEY (product_id) REFERENCES products(id)      ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS product_ingredients (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id    INTEGER NOT NULL,
+      ingredient_id INTEGER NOT NULL,
+      quantity      REAL    NOT NULL,
+      UNIQUE (product_id, ingredient_id),
+      FOREIGN KEY (product_id)    REFERENCES products(id) ON DELETE CASCADE,
+      FOREIGN KEY (ingredient_id) REFERENCES products(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS composite_deductions (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_id       INTEGER NOT NULL,
+      order_item_id  INTEGER NOT NULL,
+      entry_id       INTEGER NOT NULL,
+      product_id     INTEGER NOT NULL,
+      quantity       REAL    NOT NULL,
+      purchase_price REAL    NOT NULL,
+      FOREIGN KEY (order_id)      REFERENCES orders(id)        ON DELETE CASCADE,
+      FOREIGN KEY (order_item_id) REFERENCES order_items(id)   ON DELETE CASCADE,
+      FOREIGN KEY (entry_id)      REFERENCES stock_entries(id) ON DELETE CASCADE,
+      FOREIGN KEY (product_id)    REFERENCES products(id)      ON DELETE CASCADE
+    );
   `);
 
   // Safe migrations for existing DBs
@@ -220,6 +244,8 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
     'ALTER TABLE products ADD COLUMN renews_stock INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE report_periods ADD COLUMN total_cost REAL',
     'ALTER TABLE report_periods ADD COLUMN profit REAL',
+    'ALTER TABLE products ADD COLUMN is_composite INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE products ADD COLUMN composite_sale_price REAL',
   ];
   for (const sql of migrations) {
     try { await database.execAsync(sql); } catch (_) { /* already exists */ }
