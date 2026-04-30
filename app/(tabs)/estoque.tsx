@@ -1,9 +1,12 @@
 import React, { useState, useCallback, useMemo } from 'react';
-import { View, Text, FlatList, Image, StyleSheet, ActivityIndicator } from 'react-native';
+import {
+  View, Text, FlatList, Image, StyleSheet, ActivityIndicator,
+  TouchableOpacity, TextInput, Modal, ScrollView, Alert,
+} from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { getStockLots, StockLot } from '../../src/database/db';
+import { getStockLots, StockLot, createWriteoff } from '../../src/database/db';
 import { useTheme, GOLD, Theme } from '../../src/theme';
 
 const fmt     = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -18,6 +21,14 @@ interface ProductGroup {
   total_value:     number;
   total_investment: number;
 }
+
+const REASON_LABELS: Record<string, string> = {
+  wrong_entry: 'Lançamento errado',
+  combo:       'Baixa para combo',
+  other:       'Outro',
+};
+
+const REASONS = Object.entries(REASON_LABELS).map(([key, label]) => ({ key, label }));
 
 function groupLots(lots: StockLot[]): ProductGroup[] {
   const map = new Map<number, ProductGroup>();
@@ -45,14 +56,64 @@ export default function EstoqueScreen() {
   const [groups, setGroups]   = useState<ProductGroup[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useFocusEffect(useCallback(() => {
-    const load = async () => {
-      setLoading(true);
-      try { setGroups(groupLots(await getStockLots())); }
-      finally { setLoading(false); }
-    };
-    load();
-  }, []));
+  const [writeoffModal, setWriteoffModal]   = useState(false);
+  const [writeoffLot,   setWriteoffLot]     = useState<StockLot | null>(null);
+  const [writeoffQty,   setWriteoffQty]     = useState('');
+  const [writeoffReason, setWriteoffReason] = useState('');
+  const [writeoffJustif, setWriteoffJustif] = useState('');
+  const [savingWriteoff, setSavingWriteoff] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { setGroups(groupLots(await getStockLots())); }
+    finally { setLoading(false); }
+  }, []);
+
+  useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  const openWriteoff = (lot: StockLot) => {
+    setWriteoffLot(lot);
+    setWriteoffQty('');
+    setWriteoffReason('');
+    setWriteoffJustif('');
+    setWriteoffModal(true);
+  };
+
+  const handleWriteoff = async () => {
+    if (!writeoffLot) return;
+    const qty = parseFloat(writeoffQty);
+    if (!qty || qty <= 0 || qty > writeoffLot.remaining_quantity)
+      return Alert.alert('Atenção', `Quantidade inválida. Máximo: ${writeoffLot.remaining_quantity} un.`);
+    if (!writeoffReason)
+      return Alert.alert('Atenção', 'Selecione um motivo.');
+    if (writeoffReason === 'other' && !writeoffJustif.trim())
+      return Alert.alert('Atenção', 'Justificativa obrigatória para o motivo "Outro".');
+
+    Alert.alert(
+      'Confirmar Baixa Excepcional',
+      `Baixar ${qty} un do lote ${fmtDate(writeoffLot.entry_date)} — ${writeoffLot.product_name}?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Confirmar', style: 'destructive',
+          onPress: async () => {
+            setSavingWriteoff(true);
+            try {
+              await createWriteoff(
+                writeoffLot.entry_id,
+                writeoffLot.product_id,
+                qty,
+                writeoffReason,
+                writeoffJustif.trim() || null,
+              );
+              setWriteoffModal(false);
+              await load();
+            } finally { setSavingWriteoff(false); }
+          },
+        },
+      ],
+    );
+  };
 
   const totalValue      = groups.reduce((s, g) => s + g.total_value, 0);
   const totalInvestment = groups.reduce((s, g) => s + g.total_investment, 0);
@@ -111,7 +172,15 @@ export default function EstoqueScreen() {
                     <View style={s.lotBadge}>
                       <Text style={s.lotBadgeText}>Lote {fmtDate(lot.entry_date)}</Text>
                     </View>
-                    <Text style={s.lotQty}>{lot.remaining_quantity} un</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                      <Text style={s.lotQty}>{lot.remaining_quantity} un</Text>
+                      <TouchableOpacity
+                        onPress={() => openWriteoff(lot)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <Ionicons name="alert-circle-outline" size={18} color={t.danger} />
+                      </TouchableOpacity>
+                    </View>
                   </View>
                   <View style={s.lotPrices}>
                     <View style={s.priceCol}>
@@ -146,6 +215,80 @@ export default function EstoqueScreen() {
           }
         />
       )}
+      <Modal visible={writeoffModal} animationType="slide" transparent
+        onRequestClose={() => { setWriteoffModal(false); setWriteoffLot(null); }}
+      >
+        <View style={s.overlay}>
+          <View style={s.sheet}>
+            <View style={s.sheetHeader}>
+              <View>
+                <Text style={s.sheetTitle}>Baixa Excepcional</Text>
+                {writeoffLot && (
+                  <Text style={s.sheetSub}>
+                    {writeoffLot.product_name} · Lote {fmtDate(writeoffLot.entry_date)}
+                  </Text>
+                )}
+              </View>
+              <TouchableOpacity onPress={() => { setWriteoffModal(false); setWriteoffLot(null); }}>
+                <Ionicons name="close" size={24} color={t.text} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={s.fieldLabel}>
+              Quantidade (máx: {writeoffLot?.remaining_quantity ?? 0} un)
+            </Text>
+            <TextInput
+              style={s.fieldInput}
+              value={writeoffQty}
+              onChangeText={setWriteoffQty}
+              keyboardType="decimal-pad"
+              placeholder="0"
+              placeholderTextColor={t.placeholder}
+            />
+
+            <Text style={[s.fieldLabel, { marginTop: 12 }]}>Motivo</Text>
+            <View style={s.reasonRow}>
+              {REASONS.map(r => (
+                <TouchableOpacity
+                  key={r.key}
+                  style={[s.reasonBtn, writeoffReason === r.key && s.reasonBtnActive]}
+                  onPress={() => setWriteoffReason(r.key)}
+                >
+                  <Text style={[s.reasonBtnText, writeoffReason === r.key && s.reasonBtnTextActive]}>
+                    {r.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {writeoffReason && (
+              <>
+                <Text style={[s.fieldLabel, { marginTop: 12 }]}>
+                  Justificativa{writeoffReason === 'other' ? ' *' : ' (opcional)'}
+                </Text>
+                <TextInput
+                  style={[s.fieldInput, { height: 80, textAlignVertical: 'top' }]}
+                  value={writeoffJustif}
+                  onChangeText={setWriteoffJustif}
+                  placeholder="Descreva o motivo..."
+                  placeholderTextColor={t.placeholder}
+                  multiline
+                />
+              </>
+            )}
+
+            <TouchableOpacity
+              style={[s.confirmBtn, savingWriteoff && { opacity: 0.6 }]}
+              onPress={handleWriteoff}
+              disabled={savingWriteoff}
+            >
+              <Text style={s.confirmBtnText}>
+                {savingWriteoff ? 'Registrando…' : 'Confirmar Baixa'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -199,5 +342,28 @@ function makeStyles(t: Theme) {
     empty:         { alignItems: 'center', marginTop: 80, gap: 8 },
     emptyText:     { fontSize: 16, color: t.sub, fontWeight: '500' },
     emptyHint:     { fontSize: 13, color: t.placeholder },
+    overlay:         { flex: 1, backgroundColor: t.overlay, justifyContent: 'flex-end' },
+    sheet: {
+      backgroundColor: t.sheetBg, borderTopLeftRadius: 24, borderTopRightRadius: 24,
+      padding: 20, paddingBottom: 40,
+    },
+    sheetHeader:     { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 },
+    sheetTitle:      { fontSize: 17, fontWeight: 'bold', color: t.text },
+    sheetSub:        { fontSize: 12, color: t.sub, marginTop: 2 },
+    fieldLabel:      { fontSize: 12, color: t.sub, marginBottom: 4, fontWeight: '600' },
+    fieldInput: {
+      borderWidth: 1, borderColor: t.border, borderRadius: 8, backgroundColor: t.inputBg,
+      paddingHorizontal: 10, paddingVertical: 9, fontSize: 15, color: t.text,
+    },
+    reasonRow:       { flexDirection: 'row', gap: 6 },
+    reasonBtn: {
+      flex: 1, paddingVertical: 9, paddingHorizontal: 4, borderRadius: 8,
+      borderWidth: 1, borderColor: t.border, backgroundColor: t.badge, alignItems: 'center',
+    },
+    reasonBtnActive: { borderColor: t.danger, backgroundColor: 'rgba(220,53,69,0.12)' },
+    reasonBtnText:   { fontSize: 11, color: t.sub, fontWeight: '600', textAlign: 'center' },
+    reasonBtnTextActive: { color: t.danger },
+    confirmBtn:      { backgroundColor: t.danger, borderRadius: 12, padding: 14, alignItems: 'center', marginTop: 16 },
+    confirmBtnText:  { color: '#FFF', fontSize: 15, fontWeight: 'bold' },
   });
 }
