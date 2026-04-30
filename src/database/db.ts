@@ -206,7 +206,7 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
       entry_id      INTEGER NOT NULL,
       product_id    INTEGER NOT NULL,
-      quantity      REAL    NOT NULL,
+      quantity      REAL    NOT NULL CHECK (quantity > 0),
       reason_type   TEXT    NOT NULL,
       justification TEXT,
       created_at    TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
