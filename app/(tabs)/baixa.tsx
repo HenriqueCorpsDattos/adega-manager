@@ -8,7 +8,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   getStockLots, getPaymentMethods, confirmOrder,
-  StockLot, PaymentMethod, CartItem,
+  getCompositeProducts, getIngredients, getAllIngredientIds,
+  StockLot, PaymentMethod, CartItem, Product, Ingredient,
 } from '../../src/database/db';
 import { useTheme, GOLD, Theme } from '../../src/theme';
 
@@ -22,6 +23,10 @@ interface ProductGroup {
   total_qty:     number;
   lots:          StockLot[];
 }
+
+type ListEntry =
+  | { kind: 'simple';    group:   ProductGroup }
+  | { kind: 'composite'; product: Product };
 
 function groupLots(lots: StockLot[]): ProductGroup[] {
   const map = new Map<number, ProductGroup>();
@@ -71,21 +76,49 @@ export default function BaixaScreen() {
   const [editNotes, setEditNotes] = useState('');
   const [editModal, setEditModal] = useState(false);
 
+  // Compostos
+  const [composites, setComposites]       = useState<Product[]>([]);
+  const [ingredientIds, setIngredientIds] = useState<Set<number>>(new Set());
+  const [showOnlySimple, setShowOnlySimple] = useState(false);
+
+  // Modal de composto
+  const [compositeModal, setCompositeModal]             = useState(false);
+  const [selectedComposite, setSelectedComposite]       = useState<Product | null>(null);
+  const [compositeIngredients, setCompositeIngredients] = useState<Ingredient[]>([]);
+  const [compositeQtyInput, setCompositeQtyInput]       = useState('');
+  const [compositeLoading, setCompositeLoading]         = useState(false);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [lots, pms] = await Promise.all([getStockLots(), getPaymentMethods()]);
+      const [lots, pms, comps, ingIds] = await Promise.all([
+        getStockLots(), getPaymentMethods(), getCompositeProducts(), getAllIngredientIds(),
+      ]);
       setGroups(groupLots(lots));
       setPaymentMethods(pms);
+      setComposites(comps);
+      setIngredientIds(new Set(ingIds));
     } finally { setLoading(false); }
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  const filtered = useMemo(
-    () => groups.filter(g => g.product_name.toLowerCase().includes(search.toLowerCase())),
-    [groups, search],
-  );
+  const listEntries = useMemo((): ListEntry[] => {
+    const q = search.toLowerCase();
+    const simpleEntries: ListEntry[] = groups
+      .filter(g => !showOnlySimple || !ingredientIds.has(g.product_id))
+      .filter(g => g.product_name.toLowerCase().includes(q))
+      .map(g => ({ kind: 'simple', group: g }));
+    const compositeEntries: ListEntry[] = showOnlySimple ? [] : composites
+      .filter(p => p.name.toLowerCase().includes(q))
+      .map(p => ({ kind: 'composite', product: p }));
+    return [...simpleEntries, ...compositeEntries]
+      .sort((a, b) => {
+        const na = a.kind === 'simple' ? a.group.product_name : a.product.name;
+        const nb = b.kind === 'simple' ? b.group.product_name : b.product.name;
+        return na.localeCompare(nb, 'pt-BR');
+      });
+  }, [groups, composites, ingredientIds, search, showOnlySimple]);
 
   const cartTotal = cart.reduce((s, i) => s + i.unit_sale_price * i.quantity, 0);
   const feePct    = selectedPM?.fee_pct ?? 0;
@@ -99,6 +132,43 @@ export default function BaixaScreen() {
     setQtyInput('');
     setNotesInput('');
     setLotModal(true);
+  };
+
+  const openCompositeModal = async (product: Product) => {
+    setSelectedComposite(product);
+    setCompositeQtyInput('');
+    setCompositeModal(true);
+    setCompositeLoading(true);
+    try { setCompositeIngredients(await getIngredients(product.id)); }
+    finally { setCompositeLoading(false); }
+  };
+
+  const handleAddCompositeToCart = () => {
+    if (!selectedComposite) return;
+    const qty = parseFloat(compositeQtyInput);
+    if (!qty || qty <= 0) { Alert.alert('Atenção', 'Informe uma quantidade válida.'); return; }
+    for (const ing of compositeIngredients) {
+      const needed = ing.quantity * qty;
+      const available = groups.find(g => g.product_id === ing.ingredient_id)?.total_qty ?? 0;
+      if (available < needed) {
+        Alert.alert('Estoque insuficiente', `"${ing.ingredient_name}" precisa de ${needed} un mas tem apenas ${available} un.`);
+        return;
+      }
+    }
+    const newItem: CartItem = {
+      product_id:      selectedComposite.id,
+      product_name:    selectedComposite.name,
+      product_image:   selectedComposite.image_uri,
+      entry_id:        null,
+      lot_date:        '',
+      quantity:        qty,
+      unit_sale_price: selectedComposite.composite_sale_price!,
+      purchase_price:  0,
+      margin_pct:      0,
+      notes:           '',
+    };
+    setCart(prev => [...prev, newItem]);
+    setCompositeModal(false);
   };
 
   const handleAddToCart = () => {
@@ -190,28 +260,68 @@ export default function BaixaScreen() {
         )}
       </View>
 
+      {/* Toggle filtro */}
+      <View style={s.filterRow}>
+        <TouchableOpacity
+          style={[s.filterBtn, !showOnlySimple && s.filterBtnActive]}
+          onPress={() => setShowOnlySimple(false)}
+        >
+          <Text style={[s.filterBtnText, !showOnlySimple && s.filterBtnTextActive]}>Todos</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[s.filterBtn, showOnlySimple && s.filterBtnActive]}
+          onPress={() => setShowOnlySimple(true)}
+        >
+          <Text style={[s.filterBtnText, showOnlySimple && s.filterBtnTextActive]}>Simples</Text>
+        </TouchableOpacity>
+      </View>
+
       <FlatList
-        data={filtered}
-        keyExtractor={g => String(g.product_id)}
+        data={listEntries}
+        keyExtractor={entry => entry.kind === 'simple' ? `s-${entry.group.product_id}` : `c-${entry.product.id}`}
         contentContainerStyle={s.list}
-        renderItem={({ item: g }) => (
-          <TouchableOpacity style={s.card} onPress={() => openLotModal(g)}>
-            {g.product_image ? (
-              <Image source={{ uri: g.product_image }} style={s.img} />
-            ) : (
-              <View style={[s.img, s.imgPlaceholder]}>
-                <Ionicons name="wine-outline" size={22} color={t.border} />
+        renderItem={({ item: entry }) => {
+          if (entry.kind === 'simple') {
+            const g = entry.group;
+            return (
+              <TouchableOpacity style={s.card} onPress={() => openLotModal(g)}>
+                {g.product_image ? (
+                  <Image source={{ uri: g.product_image }} style={s.img} />
+                ) : (
+                  <View style={[s.img, s.imgPlaceholder]}>
+                    <Ionicons name="wine-outline" size={22} color={t.border} />
+                  </View>
+                )}
+                <View style={s.cardInfo}>
+                  <Text style={s.productName}>{g.product_name}</Text>
+                  <Text style={s.stockText}>
+                    {g.total_qty} un · {g.lots.length} lote{g.lots.length > 1 ? 's' : ''}
+                  </Text>
+                </View>
+                <Ionicons name="add-circle-outline" size={26} color={GOLD} />
+              </TouchableOpacity>
+            );
+          }
+          const p = entry.product;
+          return (
+            <TouchableOpacity style={s.card} onPress={() => openCompositeModal(p)}>
+              {p.image_uri ? (
+                <Image source={{ uri: p.image_uri }} style={s.img} />
+              ) : (
+                <View style={[s.img, s.imgPlaceholder]}>
+                  <Ionicons name="layers-outline" size={22} color={t.border} />
+                </View>
+              )}
+              <View style={s.cardInfo}>
+                <Text style={s.productName}>{p.name}</Text>
+                <Text style={[s.stockText, { color: t.sub }]}>
+                  Composto · {p.composite_sale_price != null ? p.composite_sale_price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '—'}
+                </Text>
               </View>
-            )}
-            <View style={s.cardInfo}>
-              <Text style={s.productName}>{g.product_name}</Text>
-              <Text style={s.stockText}>
-                {g.total_qty} un · {g.lots.length} lote{g.lots.length > 1 ? 's' : ''}
-              </Text>
-            </View>
-            <Ionicons name="add-circle-outline" size={26} color={GOLD} />
-          </TouchableOpacity>
-        )}
+              <Ionicons name="add-circle-outline" size={26} color={GOLD} />
+            </TouchableOpacity>
+          );
+        }}
         ListEmptyComponent={
           <View style={s.empty}>
             <Ionicons name="arrow-up-circle-outline" size={64} color={t.border} />
@@ -310,7 +420,10 @@ export default function BaixaScreen() {
                   <View style={{ flex: 1 }}>
                     <Text style={s.cartItemName}>{item.product_name}</Text>
                     <Text style={s.cartItemDetail}>
-                      Lote {fmtDate(item.lot_date)} · {item.quantity} un · {fmt(item.unit_sale_price)}/un
+                      {item.entry_id !== null
+                        ? `Lote ${fmtDate(item.lot_date)} · ${item.quantity} un · ${fmt(item.unit_sale_price)}/un`
+                        : `Composto · ${item.quantity} un · ${fmt(item.unit_sale_price)}/un`
+                      }
                     </Text>
                     {item.notes ? <Text style={s.cartItemNotes}>{item.notes}</Text> : null}
                   </View>
@@ -451,6 +564,74 @@ export default function BaixaScreen() {
           </View>
         </View>
       </Modal>
+      {/* ── Modal de produto composto ── */}
+      <Modal visible={compositeModal} animationType="slide" transparent
+        onRequestClose={() => { setCompositeModal(false); setSelectedComposite(null); }}
+      >
+        <View style={s.overlay}>
+          <View style={s.sheet}>
+            <View style={s.cartHeader}>
+              <View>
+                <Text style={s.sheetTitle}>{selectedComposite?.name}</Text>
+                {selectedComposite?.composite_sale_price != null && (
+                  <Text style={s.sectionLabel}>
+                    {fmt(selectedComposite.composite_sale_price)} / un
+                  </Text>
+                )}
+              </View>
+              <TouchableOpacity onPress={() => { setCompositeModal(false); setSelectedComposite(null); }}>
+                <Ionicons name="close" size={24} color={t.text} />
+              </TouchableOpacity>
+            </View>
+
+            {compositeLoading ? (
+              <ActivityIndicator size="small" color={GOLD} style={{ marginVertical: 12 }} />
+            ) : (
+              <>
+                <Text style={s.sectionLabel}>Ingredientes por unidade:</Text>
+                {compositeIngredients.map(ing => {
+                  const qty = parseFloat(compositeQtyInput) || 0;
+                  const needed = ing.quantity * qty;
+                  const available = groups.find(g => g.product_id === ing.ingredient_id)?.total_qty ?? 0;
+                  const insufficient = qty > 0 && needed > available;
+                  return (
+                    <View key={ing.id} style={s.compositeIngRow}>
+                      <Text style={[s.compositeIngName, insufficient && { color: t.danger }]}>
+                        {ing.ingredient_name}
+                      </Text>
+                      <Text style={[s.compositeIngQty, insufficient && { color: t.danger }]}>
+                        {qty > 0 ? `${needed}` : `${ing.quantity}`} / {available} un
+                      </Text>
+                    </View>
+                  );
+                })}
+
+                <Text style={[s.sectionLabel, { marginTop: 12 }]}>Quantidade:</Text>
+                <TextInput
+                  style={s.input}
+                  placeholder="0"
+                  placeholderTextColor={t.placeholder}
+                  value={compositeQtyInput}
+                  onChangeText={setCompositeQtyInput}
+                  keyboardType="decimal-pad"
+                />
+              </>
+            )}
+
+            <View style={s.btnRow}>
+              <TouchableOpacity
+                style={[s.btn, s.btnCancel]}
+                onPress={() => { setCompositeModal(false); setSelectedComposite(null); }}
+              >
+                <Text style={s.btnCancelText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.btn, s.btnSave]} onPress={handleAddCompositeToCart}>
+                <Text style={s.btnSaveText}>Adicionar ao carrinho</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -546,5 +727,23 @@ function makeStyles(t: Theme) {
     pmChipText:       { fontSize: 13, color: t.sub, fontWeight: '600' },
     pmChipTextSelected: { color: '#000' },
     checkoutSummary:  { backgroundColor: t.badge, borderRadius: 10, padding: 12, marginBottom: 16, borderWidth: 1, borderColor: t.border },
+    filterRow: {
+      flexDirection: 'row', gap: 8,
+      marginHorizontal: 12, marginTop: 4, marginBottom: 4,
+    },
+    filterBtn: {
+      flex: 1, paddingVertical: 8, borderRadius: 20,
+      borderWidth: 1, borderColor: t.border, backgroundColor: t.badge,
+      alignItems: 'center',
+    },
+    filterBtnActive:    { backgroundColor: GOLD, borderColor: GOLD },
+    filterBtnText:      { fontSize: 13, color: t.sub, fontWeight: '600' },
+    filterBtnTextActive: { color: '#000' },
+    compositeIngRow: {
+      flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+      paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: t.border,
+    },
+    compositeIngName:   { fontSize: 13, color: t.text, flex: 1 },
+    compositeIngQty:    { fontSize: 12, color: t.sub, fontWeight: '600' },
   });
 }
