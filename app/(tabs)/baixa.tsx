@@ -135,6 +135,7 @@ export default function BaixaScreen() {
   };
 
   const openCompositeModal = async (product: Product) => {
+    setCompositeIngredients([]);
     setSelectedComposite(product);
     setCompositeQtyInput('');
     setCompositeModal(true);
@@ -147,14 +148,35 @@ export default function BaixaScreen() {
     if (!selectedComposite) return;
     const qty = parseFloat(compositeQtyInput);
     if (!qty || qty <= 0) { Alert.alert('Atenção', 'Informe uma quantidade válida.'); return; }
+
+    if (selectedComposite.composite_sale_price == null) {
+      Alert.alert('Erro', 'Este composto não tem preço de venda cadastrado.');
+      return;
+    }
+
+    // Build a map of ingredient quantities already in cart (from all composite items)
+    const cartIngredientUsage = new Map<number, number>();
+    for (const cartItem of cart) {
+      if (cartItem.entry_id !== null) continue;
+      // Account for the same composite repeated in the cart
+      if (cartItem.product_id === selectedComposite.id) {
+        for (const ing of compositeIngredients) {
+          const prev = cartIngredientUsage.get(ing.ingredient_id) ?? 0;
+          cartIngredientUsage.set(ing.ingredient_id, prev + ing.quantity * cartItem.quantity);
+        }
+      }
+    }
+
     for (const ing of compositeIngredients) {
       const needed = ing.quantity * qty;
-      const available = groups.find(g => g.product_id === ing.ingredient_id)?.total_qty ?? 0;
+      const alreadyUsed = cartIngredientUsage.get(ing.ingredient_id) ?? 0;
+      const available = (groups.find(g => g.product_id === ing.ingredient_id)?.total_qty ?? 0) - alreadyUsed;
       if (available < needed) {
         Alert.alert('Estoque insuficiente', `"${ing.ingredient_name}" precisa de ${needed} un mas tem apenas ${available} un.`);
         return;
       }
     }
+
     const newItem: CartItem = {
       product_id:      selectedComposite.id,
       product_name:    selectedComposite.name,
@@ -162,7 +184,7 @@ export default function BaixaScreen() {
       entry_id:        null,
       lot_date:        '',
       quantity:        qty,
-      unit_sale_price: selectedComposite.composite_sale_price!,
+      unit_sale_price: selectedComposite.composite_sale_price,
       purchase_price:  0,
       margin_pct:      0,
       notes:           '',
@@ -212,6 +234,15 @@ export default function BaixaScreen() {
     if (editIdx === null) return;
     const qty = parseFloat(editQty);
     if (!qty || qty <= 0) { Alert.alert('Atenção', 'Quantidade inválida.'); return; }
+
+    if (cart[editIdx].entry_id === null && qty > cart[editIdx].quantity) {
+      Alert.alert(
+        'Atenção',
+        'Para aumentar a quantidade de um composto, remova-o do carrinho e adicione novamente.',
+      );
+      return;
+    }
+
     setCart(prev => prev.map((item, i) =>
       i === editIdx ? { ...item, quantity: qty, notes: editNotes } : item,
     ));
@@ -600,7 +631,10 @@ export default function BaixaScreen() {
                         {ing.ingredient_name}
                       </Text>
                       <Text style={[s.compositeIngQty, insufficient && { color: t.danger }]}>
-                        {qty > 0 ? `${needed}` : `${ing.quantity}`} / {available} un
+                        {qty > 0
+                          ? needed.toLocaleString('pt-BR', { maximumFractionDigits: 2 })
+                          : ing.quantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })
+                        } / {available} un
                       </Text>
                     </View>
                   );
