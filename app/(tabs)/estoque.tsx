@@ -6,7 +6,7 @@ import {
 import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { getStockLots, StockLot, createWriteoff } from '../../src/database/db';
+import { getStockLots, StockLot, createWriteoff, getWriteoffs, Writeoff } from '../../src/database/db';
 import { useTheme, GOLD, Theme } from '../../src/theme';
 
 const fmt     = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -63,6 +63,10 @@ export default function EstoqueScreen() {
   const [writeoffJustif, setWriteoffJustif] = useState('');
   const [savingWriteoff, setSavingWriteoff] = useState(false);
 
+  const [historyModal,   setHistoryModal]   = useState(false);
+  const [writeoffs,      setWriteoffs]      = useState<Writeoff[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
   const load = useCallback(async () => {
     setLoading(true);
     try { setGroups(groupLots(await getStockLots())); }
@@ -115,6 +119,13 @@ export default function EstoqueScreen() {
     );
   };
 
+  const openHistory = async () => {
+    setHistoryLoading(true);
+    setHistoryModal(true);
+    try { setWriteoffs(await getWriteoffs()); }
+    finally { setHistoryLoading(false); }
+  };
+
   const totalValue      = groups.reduce((s, g) => s + g.total_value, 0);
   const totalInvestment = groups.reduce((s, g) => s + g.total_investment, 0);
 
@@ -128,25 +139,32 @@ export default function EstoqueScreen() {
           keyExtractor={g => String(g.product_id)}
           contentContainerStyle={s.list}
           ListHeaderComponent={
-            groups.length > 0 ? (
-              <View style={s.summary}>
-                <View style={s.summaryRow}>
-                  <View style={s.summaryCol}>
-                    <Text style={s.summaryLabel}>Investido (custo)</Text>
-                    <Text style={s.summaryValueSmall}>{fmt(totalInvestment)}</Text>
+            <View>
+              {groups.length > 0 && (
+                <View style={s.summary}>
+                  <View style={s.summaryRow}>
+                    <View style={s.summaryCol}>
+                      <Text style={s.summaryLabel}>Investido (custo)</Text>
+                      <Text style={s.summaryValueSmall}>{fmt(totalInvestment)}</Text>
+                    </View>
+                    <View style={s.summaryDivider} />
+                    <View style={s.summaryCol}>
+                      <Text style={s.summaryLabel}>A receber (venda)</Text>
+                      <Text style={[s.summaryValueSmall, { color: GOLD }]}>{fmt(totalValue)}</Text>
+                    </View>
                   </View>
-                  <View style={s.summaryDivider} />
-                  <View style={s.summaryCol}>
-                    <Text style={s.summaryLabel}>A receber (venda)</Text>
-                    <Text style={[s.summaryValueSmall, { color: GOLD }]}>{fmt(totalValue)}</Text>
+                  <View style={s.profitRow}>
+                    <Text style={s.profitLabel}>Margem potencial</Text>
+                    <Text style={s.profitValue}>{fmt(totalValue - totalInvestment)}</Text>
                   </View>
                 </View>
-                <View style={s.profitRow}>
-                  <Text style={s.profitLabel}>Margem potencial</Text>
-                  <Text style={s.profitValue}>{fmt(totalValue - totalInvestment)}</Text>
-                </View>
-              </View>
-            ) : null
+              )}
+              <TouchableOpacity style={s.historyBtn} onPress={openHistory}>
+                <Ionicons name="time-outline" size={16} color={GOLD} />
+                <Text style={s.historyBtnText}>Histórico de Baixas Excepcionais</Text>
+                <Ionicons name="chevron-forward" size={16} color={GOLD} />
+              </TouchableOpacity>
+            </View>
           }
           renderItem={({ item: g }) => (
             <View style={s.productCard}>
@@ -289,6 +307,56 @@ export default function EstoqueScreen() {
           </View>
         </View>
       </Modal>
+      <Modal visible={historyModal} animationType="slide" transparent
+        onRequestClose={() => setHistoryModal(false)}
+      >
+        <View style={s.overlay}>
+          <View style={[s.sheet, { maxHeight: '85%' }]}>
+            <View style={s.sheetHeader}>
+              <Text style={s.sheetTitle}>Histórico de Baixas Excepcionais</Text>
+              <TouchableOpacity onPress={() => setHistoryModal(false)}>
+                <Ionicons name="close" size={24} color={t.text} />
+              </TouchableOpacity>
+            </View>
+
+            {historyLoading ? (
+              <ActivityIndicator size="small" color={GOLD} style={{ marginVertical: 24 }} />
+            ) : writeoffs.length === 0 ? (
+              <View style={s.empty}>
+                <Ionicons name="checkmark-circle-outline" size={48} color={t.border} />
+                <Text style={s.emptyText}>Nenhuma baixa excepcional registrada</Text>
+              </View>
+            ) : (
+              <ScrollView>
+                {writeoffs.map(w => (
+                  <View key={w.id} style={s.writeoffItem}>
+                    {w.product_image ? (
+                      <Image source={{ uri: w.product_image }} style={s.writeoffImg} />
+                    ) : (
+                      <View style={[s.writeoffImg, s.imgPlaceholder]}>
+                        <Ionicons name="wine-outline" size={14} color={t.border} />
+                      </View>
+                    )}
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.writeoffName}>{w.product_name}</Text>
+                      <Text style={s.writeoffMeta}>
+                        Lote {fmtDate(w.entry_date)} · {fmtDate(w.created_at)}
+                      </Text>
+                      <Text style={s.writeoffReasonLabel}>
+                        {REASON_LABELS[w.reason_type] ?? w.reason_type}
+                      </Text>
+                      {w.justification ? (
+                        <Text style={s.writeoffJustifText}>{w.justification}</Text>
+                      ) : null}
+                    </View>
+                    <Text style={s.writeoffQtyText}>-{w.quantity} un</Text>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -365,5 +433,21 @@ function makeStyles(t: Theme) {
     reasonBtnTextActive: { color: t.danger },
     confirmBtn:      { backgroundColor: t.danger, borderRadius: 12, padding: 14, alignItems: 'center', marginTop: 16 },
     confirmBtnText:  { color: '#FFF', fontSize: 15, fontWeight: 'bold' },
+    historyBtn: {
+      flexDirection: 'row', alignItems: 'center', gap: 8,
+      backgroundColor: t.card, borderRadius: 10, padding: 12,
+      marginBottom: 12, borderWidth: 1, borderColor: t.border,
+    },
+    historyBtnText:       { flex: 1, fontSize: 13, color: GOLD, fontWeight: '600' },
+    writeoffItem: {
+      flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 10,
+      borderBottomWidth: 1, borderBottomColor: t.border, gap: 10,
+    },
+    writeoffImg:          { width: 36, height: 36, borderRadius: 6 },
+    writeoffName:         { fontSize: 13, fontWeight: '600', color: t.text },
+    writeoffMeta:         { fontSize: 11, color: t.sub, marginTop: 1 },
+    writeoffReasonLabel:  { fontSize: 11, color: t.danger, fontWeight: '600', marginTop: 2 },
+    writeoffJustifText:   { fontSize: 11, color: t.placeholder, fontStyle: 'italic', marginTop: 1 },
+    writeoffQtyText:      { fontSize: 13, fontWeight: '700', color: t.danger },
   });
 }
