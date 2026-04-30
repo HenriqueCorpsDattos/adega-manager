@@ -87,6 +87,7 @@ export default function BaixaScreen() {
   const [compositeIngredients, setCompositeIngredients] = useState<Ingredient[]>([]);
   const [compositeQtyInput, setCompositeQtyInput]       = useState('');
   const [compositeLoading, setCompositeLoading]         = useState(false);
+  const [compositeIngCache, setCompositeIngCache]       = useState<Record<number, Ingredient[]>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -140,7 +141,11 @@ export default function BaixaScreen() {
     setCompositeQtyInput('');
     setCompositeModal(true);
     setCompositeLoading(true);
-    try { setCompositeIngredients(await getIngredients(product.id)); }
+    try {
+      const ings = await getIngredients(product.id);
+      setCompositeIngredients(ings);
+      setCompositeIngCache(prev => ({ ...prev, [product.id]: ings }));
+    }
     finally { setCompositeLoading(false); }
   };
 
@@ -154,16 +159,14 @@ export default function BaixaScreen() {
       return;
     }
 
-    // Build a map of ingredient quantities already in cart (from all composite items)
+    // Build a map of ingredient quantities already in cart (from ALL composite items)
     const cartIngredientUsage = new Map<number, number>();
     for (const cartItem of cart) {
-      if (cartItem.entry_id !== null) continue;
-      // Account for the same composite repeated in the cart
-      if (cartItem.product_id === selectedComposite.id) {
-        for (const ing of compositeIngredients) {
-          const prev = cartIngredientUsage.get(ing.ingredient_id) ?? 0;
-          cartIngredientUsage.set(ing.ingredient_id, prev + ing.quantity * cartItem.quantity);
-        }
+      if (cartItem.entry_id !== null) continue; // skip simple items
+      const recipe = compositeIngCache[cartItem.product_id] ?? [];
+      for (const ing of recipe) {
+        const prev = cartIngredientUsage.get(ing.ingredient_id) ?? 0;
+        cartIngredientUsage.set(ing.ingredient_id, prev + ing.quantity * cartItem.quantity);
       }
     }
 
@@ -623,7 +626,15 @@ export default function BaixaScreen() {
                 {compositeIngredients.map(ing => {
                   const qty = parseFloat(compositeQtyInput) || 0;
                   const needed = ing.quantity * qty;
-                  const available = groups.find(g => g.product_id === ing.ingredient_id)?.total_qty ?? 0;
+                  // Subtract cart usage across all composites for accurate display
+                  const cartAlreadyUsed = cart
+                    .filter(ci => ci.entry_id === null)
+                    .reduce((sum, ci) => {
+                      const recipe = compositeIngCache[ci.product_id] ?? [];
+                      const ing_recipe = recipe.find(r => r.ingredient_id === ing.ingredient_id);
+                      return sum + (ing_recipe ? ing_recipe.quantity * ci.quantity : 0);
+                    }, 0);
+                  const available = (groups.find(g => g.product_id === ing.ingredient_id)?.total_qty ?? 0) - cartAlreadyUsed;
                   const insufficient = qty > 0 && needed > available;
                   return (
                     <View key={ing.id} style={s.compositeIngRow}>
