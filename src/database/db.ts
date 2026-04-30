@@ -86,6 +86,19 @@ export interface ReportPeriod {
   profit: number | null;
 }
 
+export interface Writeoff {
+  id:            number;
+  entry_id:      number;
+  product_id:    number;
+  product_name:  string;
+  product_image: string | null;
+  quantity:      number;
+  reason_type:   string;
+  justification: string | null;
+  entry_date:    string;
+  created_at:    string;
+}
+
 // ─── Cart item (local state only) ────────────────────────────────────────────
 
 export interface CartItem {
@@ -187,6 +200,18 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       done             INTEGER NOT NULL DEFAULT 0,
       created_at       TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
       FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS stock_writeoffs (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      entry_id      INTEGER NOT NULL,
+      product_id    INTEGER NOT NULL,
+      quantity      REAL    NOT NULL,
+      reason_type   TEXT    NOT NULL,
+      justification TEXT,
+      created_at    TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+      FOREIGN KEY (entry_id)   REFERENCES stock_entries(id) ON DELETE CASCADE,
+      FOREIGN KEY (product_id) REFERENCES products(id)      ON DELETE CASCADE
     );
   `);
 
@@ -333,6 +358,41 @@ export async function registerEntry(
     'INSERT INTO stock_entries (product_id, quantity, purchase_price, margin_pct) VALUES (?, ?, ?, ?)',
     [productId, quantity, purchasePrice, marginPct],
   );
+}
+
+export async function createWriteoff(
+  entryId:      number,
+  productId:    number,
+  quantity:     number,
+  reasonType:   string,
+  justification: string | null,
+): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync(
+    'INSERT INTO stock_writeoffs (entry_id, product_id, quantity, reason_type, justification) VALUES (?, ?, ?, ?, ?)',
+    [entryId, productId, quantity, reasonType, justification],
+  );
+}
+
+export async function getWriteoffs(): Promise<Writeoff[]> {
+  const db = await getDatabase();
+  return db.getAllAsync<Writeoff>(`
+    SELECT
+      sw.id,
+      sw.entry_id,
+      sw.product_id,
+      p.name        AS product_name,
+      p.image_uri   AS product_image,
+      sw.quantity,
+      sw.reason_type,
+      sw.justification,
+      se.entry_date,
+      sw.created_at
+    FROM stock_writeoffs sw
+    JOIN products      p  ON p.id  = sw.product_id
+    JOIN stock_entries se ON se.id = sw.entry_id
+    ORDER BY sw.created_at DESC
+  `);
 }
 
 // ─── Orders ──────────────────────────────────────────────────────────────────
