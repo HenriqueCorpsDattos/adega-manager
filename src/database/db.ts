@@ -5,11 +5,21 @@ import { Asset } from 'expo-asset';
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface Product {
-  id: number;
-  name: string;
-  image_uri: string | null;
-  renews_stock: number; // 0 | 1
-  created_at: string;
+  id:                   number;
+  name:                 string;
+  image_uri:            string | null;
+  renews_stock:         number; // 0 | 1
+  is_composite:         number; // 0 | 1
+  composite_sale_price: number | null;
+  created_at:           string;
+}
+
+export interface Ingredient {
+  id:              number;
+  product_id:      number;
+  ingredient_id:   number;
+  ingredient_name: string;
+  quantity:        number;
 }
 
 export interface StockLot {
@@ -105,11 +115,11 @@ export interface CartItem {
   product_id:      number;
   product_name:    string;
   product_image:   string | null;
-  entry_id:        number;
-  lot_date:        string;
+  entry_id:        number | null; // null para produtos compostos
+  lot_date:        string;        // vazio ('') para produtos compostos
   quantity:        number;
   unit_sale_price: number;
-  purchase_price:  number;
+  purchase_price:  number;        // 0 para compostos (calculado no confirmOrder)
   margin_pct:      number;
   notes:           string;
 }
@@ -300,25 +310,81 @@ export async function getProducts(): Promise<Product[]> {
   return db.getAllAsync<Product>('SELECT * FROM products ORDER BY name ASC');
 }
 
-export async function createProduct(name: string, imageUri: string | null, renewsStock: boolean) {
+export async function createProduct(
+  name: string,
+  imageUri: string | null,
+  renewsStock: boolean,
+  isComposite: boolean = false,
+  compositeSalePrice: number | null = null,
+) {
   const db = await getDatabase();
   return db.runAsync(
-    'INSERT INTO products (name, image_uri, renews_stock) VALUES (?, ?, ?)',
-    [name, imageUri, renewsStock ? 1 : 0],
+    'INSERT INTO products (name, image_uri, renews_stock, is_composite, composite_sale_price) VALUES (?, ?, ?, ?, ?)',
+    [name, imageUri, renewsStock ? 1 : 0, isComposite ? 1 : 0, compositeSalePrice],
   );
 }
 
-export async function updateProduct(id: number, name: string, imageUri: string | null, renewsStock: boolean) {
+export async function updateProduct(
+  id: number,
+  name: string,
+  imageUri: string | null,
+  renewsStock: boolean,
+  isComposite: boolean = false,
+  compositeSalePrice: number | null = null,
+) {
   const db = await getDatabase();
   return db.runAsync(
-    'UPDATE products SET name = ?, image_uri = ?, renews_stock = ? WHERE id = ?',
-    [name, imageUri, renewsStock ? 1 : 0, id],
+    'UPDATE products SET name = ?, image_uri = ?, renews_stock = ?, is_composite = ?, composite_sale_price = ? WHERE id = ?',
+    [name, imageUri, renewsStock ? 1 : 0, isComposite ? 1 : 0, compositeSalePrice, id],
   );
 }
 
 export async function deleteProduct(id: number) {
   const db = await getDatabase();
   return db.runAsync('DELETE FROM products WHERE id = ?', [id]);
+}
+
+export async function getCompositeProducts(): Promise<Product[]> {
+  const db = await getDatabase();
+  return db.getAllAsync<Product>('SELECT * FROM products WHERE is_composite = 1 ORDER BY name ASC');
+}
+
+export async function getIngredients(productId: number): Promise<Ingredient[]> {
+  const db = await getDatabase();
+  return db.getAllAsync<Ingredient>(`
+    SELECT
+      pi.id,
+      pi.product_id,
+      pi.ingredient_id,
+      p.name AS ingredient_name,
+      pi.quantity
+    FROM product_ingredients pi
+    JOIN products p ON p.id = pi.ingredient_id
+    WHERE pi.product_id = ?
+    ORDER BY p.name ASC
+  `, [productId]);
+}
+
+export async function saveIngredients(
+  productId: number,
+  ingredients: { ingredientId: number; quantity: number }[],
+): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('DELETE FROM product_ingredients WHERE product_id = ?', [productId]);
+  for (const ing of ingredients) {
+    await db.runAsync(
+      'INSERT INTO product_ingredients (product_id, ingredient_id, quantity) VALUES (?, ?, ?)',
+      [productId, ing.ingredientId, ing.quantity],
+    );
+  }
+}
+
+export async function getAllIngredientIds(): Promise<number[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<{ ingredient_id: number }>(
+    'SELECT DISTINCT ingredient_id FROM product_ingredients',
+  );
+  return rows.map(r => r.ingredient_id);
 }
 
 // ─── Stock Lots ───────────────────────────────────────────────────────────────
