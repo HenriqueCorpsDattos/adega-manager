@@ -306,9 +306,10 @@ export async function getStockLots(): Promise<StockLot[]> {
       p.name               AS product_name,
       p.image_uri          AS product_image,
       se.quantity          AS original_quantity,
-      (se.quantity - COALESCE(
-        (SELECT SUM(oi.quantity) FROM order_items oi WHERE oi.entry_id = se.id), 0
-      ))                   AS remaining_quantity,
+      (se.quantity
+        - COALESCE((SELECT SUM(oi.quantity) FROM order_items    oi WHERE oi.entry_id = se.id), 0)
+        - COALESCE((SELECT SUM(sw.quantity) FROM stock_writeoffs sw WHERE sw.entry_id = se.id), 0)
+      )                    AS remaining_quantity,
       se.purchase_price,
       se.margin_pct,
       se.entry_date
@@ -329,14 +330,15 @@ export async function getStockSummary(): Promise<StockSummary[]> {
       p.name                                      AS product_name,
       p.image_uri                                 AS product_image,
       COALESCE(SUM(
-        se.quantity - COALESCE((
-          SELECT SUM(oi.quantity) FROM order_items oi WHERE oi.entry_id = se.id
-        ), 0)
+        se.quantity
+        - COALESCE((SELECT SUM(oi.quantity) FROM order_items    oi WHERE oi.entry_id = se.id), 0)
+        - COALESCE((SELECT SUM(sw.quantity) FROM stock_writeoffs sw WHERE sw.entry_id = se.id), 0)
       ), 0)                                       AS total_quantity,
       COALESCE(SUM(
-        (se.quantity - COALESCE((
-          SELECT SUM(oi.quantity) FROM order_items oi WHERE oi.entry_id = se.id
-        ), 0)) * se.purchase_price
+        (se.quantity
+          - COALESCE((SELECT SUM(oi.quantity) FROM order_items    oi WHERE oi.entry_id = se.id), 0)
+          - COALESCE((SELECT SUM(sw.quantity) FROM stock_writeoffs sw WHERE sw.entry_id = se.id), 0)
+        ) * se.purchase_price
       ), 0)                                       AS total_investment
     FROM products p
     LEFT JOIN stock_entries se ON se.product_id = p.id
