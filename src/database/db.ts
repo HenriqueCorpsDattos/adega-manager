@@ -228,7 +228,7 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
       product_id    INTEGER NOT NULL,
       ingredient_id INTEGER NOT NULL,
-      quantity      REAL    NOT NULL,
+      quantity      REAL    NOT NULL CHECK (quantity > 0),
       UNIQUE (product_id, ingredient_id),
       FOREIGN KEY (product_id)    REFERENCES products(id) ON DELETE CASCADE,
       FOREIGN KEY (ingredient_id) REFERENCES products(id) ON DELETE CASCADE
@@ -240,7 +240,7 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       order_item_id  INTEGER NOT NULL,
       entry_id       INTEGER NOT NULL,
       product_id     INTEGER NOT NULL,
-      quantity       REAL    NOT NULL,
+      quantity       REAL    NOT NULL CHECK (quantity > 0),
       purchase_price REAL    NOT NULL,
       FOREIGN KEY (order_id)      REFERENCES orders(id)        ON DELETE CASCADE,
       FOREIGN KEY (order_item_id) REFERENCES order_items(id)   ON DELETE CASCADE,
@@ -370,13 +370,20 @@ export async function saveIngredients(
   ingredients: { ingredientId: number; quantity: number }[],
 ): Promise<void> {
   const db = await getDatabase();
-  await db.runAsync('DELETE FROM product_ingredients WHERE product_id = ?', [productId]);
   for (const ing of ingredients) {
-    await db.runAsync(
-      'INSERT INTO product_ingredients (product_id, ingredient_id, quantity) VALUES (?, ?, ?)',
-      [productId, ing.ingredientId, ing.quantity],
-    );
+    if (!(ing.quantity > 0)) {
+      throw new Error(`Quantidade inválida para ingrediente ${ing.ingredientId}: deve ser maior que zero.`);
+    }
   }
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    await txn.runAsync('DELETE FROM product_ingredients WHERE product_id = ?', [productId]);
+    for (const ing of ingredients) {
+      await txn.runAsync(
+        'INSERT INTO product_ingredients (product_id, ingredient_id, quantity) VALUES (?, ?, ?)',
+        [productId, ing.ingredientId, ing.quantity],
+      );
+    }
+  });
 }
 
 export async function getAllIngredientIds(): Promise<number[]> {
@@ -555,67 +562,88 @@ export async function confirmOrder(
   const feeValue   = totalValue * (feePct / 100);
   const netValue   = (totalValue - totalCost) - feeValue;
 
-  const orderResult = await db.runAsync(
-    'INSERT INTO orders (payment_method_id, period_id, total_value, fee_value, net_value, notes) VALUES (?, ?, ?, ?, ?, ?)',
-    [paymentMethodId, periodId, totalValue, feeValue, netValue, notes || null],
-  );
-  const orderId = orderResult.lastInsertRowId;
+  let orderId = 0;
 
-  for (let idx = 0; idx < items.length; idx++) {
-    const item = items[idx];
-    const purchasePrice = item.entry_id !== null ? item.purchase_price : compositePppu[idx];
-    const itemResult = await db.runAsync(
-      'INSERT INTO order_items (order_id, product_id, entry_id, quantity, unit_sale_price, purchase_price, notes) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [orderId, item.product_id, item.entry_id, item.quantity, item.unit_sale_price, purchasePrice, item.notes || null],
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    const orderResult = await txn.runAsync(
+      'INSERT INTO orders (payment_method_id, period_id, total_value, fee_value, net_value, notes) VALUES (?, ?, ?, ?, ?, ?)',
+      [paymentMethodId, periodId, totalValue, feeValue, netValue, notes || null],
     );
-    const orderItemId = itemResult.lastInsertRowId;
+    orderId = orderResult.lastInsertRowId;
 
-    // Para compostos: deduções FIFO nos lotes dos ingredientes
-    if (item.entry_id === null) {
-      const ingredients = await db.getAllAsync<{ ingredient_id: number; quantity: number }>(
-        'SELECT ingredient_id, quantity FROM product_ingredients WHERE product_id = ?',
-        [item.product_id],
+    for (let idx = 0; idx < items.length; idx++) {
+      const item = items[idx];
+      const purchasePrice = item.entry_id !== null ? item.purchase_price : compositePppu[idx];
+      const itemResult = await txn.runAsync(
+        'INSERT INTO order_items (order_id, product_id, entry_id, quantity, unit_sale_price, purchase_price, notes) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [orderId, item.product_id, item.entry_id, item.quantity, item.unit_sale_price, purchasePrice, item.notes || null],
       );
-      for (const ing of ingredients) {
-        const needed = ing.quantity * item.quantity;
-        const lots = await db.getAllAsync<{ id: number; available: number; purchase_price: number }>(
-          `SELECT se.id,
-             (se.quantity
-               - COALESCE((SELECT SUM(oi.quantity) FROM order_items         oi WHERE oi.entry_id = se.id), 0)
-               - COALESCE((SELECT SUM(sw.quantity) FROM stock_writeoffs      sw WHERE sw.entry_id = se.id), 0)
-               - COALESCE((SELECT SUM(cd.quantity) FROM composite_deductions cd WHERE cd.entry_id = se.id), 0)
-             ) AS available,
-             se.purchase_price
-           FROM stock_entries se
-           WHERE se.product_id = ?
-           ORDER BY se.entry_date ASC`,
-          [ing.ingredient_id],
+      const orderItemId = itemResult.lastInsertRowId;
+
+      // Para compostos: deduções FIFO nos lotes dos ingredientes
+      if (item.entry_id === null) {
+        const ingredients = await txn.getAllAsync<{ ingredient_id: number; quantity: number }>(
+          'SELECT ingredient_id, quantity FROM product_ingredients WHERE product_id = ?',
+          [item.product_id],
         );
-        let remaining = needed;
-        for (const lot of lots) {
-          if (remaining <= 0) break;
-          if (lot.available <= 0) continue;
-          const deduct = Math.min(remaining, lot.available);
-          await db.runAsync(
-            'INSERT INTO composite_deductions (order_id, order_item_id, entry_id, product_id, quantity, purchase_price) VALUES (?, ?, ?, ?, ?, ?)',
-            [orderId, orderItemId, lot.id, ing.ingredient_id, deduct, lot.purchase_price],
+        for (const ing of ingredients) {
+          const needed = ing.quantity * item.quantity;
+          const lots = await txn.getAllAsync<{ id: number; available: number; purchase_price: number }>(
+            `SELECT se.id,
+               (se.quantity
+                 - COALESCE((SELECT SUM(oi.quantity) FROM order_items         oi WHERE oi.entry_id = se.id), 0)
+                 - COALESCE((SELECT SUM(sw.quantity) FROM stock_writeoffs      sw WHERE sw.entry_id = se.id), 0)
+                 - COALESCE((SELECT SUM(cd.quantity) FROM composite_deductions cd WHERE cd.entry_id = se.id), 0)
+               ) AS available,
+               se.purchase_price
+             FROM stock_entries se
+             WHERE se.product_id = ?
+             ORDER BY se.entry_date ASC`,
+            [ing.ingredient_id],
           );
-          remaining -= deduct;
+          let remaining = needed;
+          for (const lot of lots) {
+            if (remaining <= 0) break;
+            if (lot.available <= 0) continue;
+            const deduct = Math.min(remaining, lot.available);
+            if (deduct <= 0) continue;
+            await txn.runAsync(
+              'INSERT INTO composite_deductions (order_id, order_item_id, entry_id, product_id, quantity, purchase_price) VALUES (?, ?, ?, ?, ?, ?)',
+              [orderId, orderItemId, lot.id, ing.ingredient_id, deduct, lot.purchase_price],
+            );
+            remaining -= deduct;
+          }
+          if (remaining > 0) {
+            throw new Error(`Estoque insuficiente para ingrediente ${ing.ingredient_id}: faltam ${remaining} un`);
+          }
         }
       }
     }
-  }
 
-  // Auto-add to shopping list (apenas produtos simples com renews_stock)
-  for (const item of items) {
-    if (item.entry_id === null) continue; // compostos não renovam estoque
-    const product = await db.getFirstAsync<{ renews_stock: number }>(
-      'SELECT renews_stock FROM products WHERE id = ?', [item.product_id],
-    );
-    if (product?.renews_stock === 1) {
-      await addToShoppingList(item.product_id, item.quantity);
+    // Auto-add to shopping list (apenas produtos simples com renews_stock)
+    for (const item of items) {
+      if (item.entry_id === null) continue; // compostos não renovam estoque
+      const product = await txn.getFirstAsync<{ renews_stock: number }>(
+        'SELECT renews_stock FROM products WHERE id = ?', [item.product_id],
+      );
+      if (product?.renews_stock === 1) {
+        const existing = await txn.getFirstAsync<{ id: number }>(
+          'SELECT id FROM shopping_list WHERE product_id = ? AND done = 0', [item.product_id],
+        );
+        if (existing) {
+          await txn.runAsync(
+            'UPDATE shopping_list SET quantity_desired = ? WHERE id = ?',
+            [item.quantity, existing.id],
+          );
+        } else {
+          await txn.runAsync(
+            'INSERT INTO shopping_list (product_id, quantity_desired) VALUES (?, ?)',
+            [item.product_id, item.quantity],
+          );
+        }
+      }
     }
-  }
+  });
 
   return orderId;
 }

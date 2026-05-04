@@ -82,12 +82,13 @@ export default function ProdutosScreen() {
     setSaving(true);
     try {
       const sp = isComposite ? parseFloat(compositeSalePrice) : null;
+      const effectiveRenewsStock = isComposite ? false : renewsStock;
       let productId: number;
       if (editing) {
-        await updateProduct(editing.id, name.trim(), imageUri, renewsStock, isComposite, sp);
+        await updateProduct(editing.id, name.trim(), imageUri, effectiveRenewsStock, isComposite, sp);
         productId = editing.id;
       } else {
-        const result = await createProduct(name.trim(), imageUri, renewsStock, isComposite, sp);
+        const result = await createProduct(name.trim(), imageUri, effectiveRenewsStock, isComposite, sp);
         productId = result.lastInsertRowId;
       }
       if (isComposite) {
@@ -213,7 +214,11 @@ export default function ProdutosScreen() {
               </View>
               <Switch
                 value={isComposite}
-                onValueChange={v => { setIsComposite(v); if (!v) setIngredients([]); }}
+                onValueChange={v => {
+                  setIsComposite(v);
+                  if (v) setRenews(false);
+                  if (!v) setIngredients([]);
+                }}
                 trackColor={{ false: t.border, true: GOLD }}
                 thumbColor={isComposite ? '#000' : t.sub}
               />

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, TextInput,
   Image, Modal, StyleSheet, Alert, ActivityIndicator, ScrollView,
@@ -103,6 +103,21 @@ export default function BaixaScreen() {
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  // Pre-populate compositeIngCache for composites already in the cart (e.g. after returning to this screen).
+  useEffect(() => {
+    const uncachedIds = cart
+      .filter(ci => ci.entry_id === null && !compositeIngCache[ci.product_id])
+      .map(ci => ci.product_id);
+    const unique = [...new Set(uncachedIds)];
+    if (unique.length === 0) return;
+    Promise.all(unique.map(async id => [id, await getIngredients(id)] as [number, Ingredient[]]))
+      .then(entries => setCompositeIngCache(prev => {
+        const next = { ...prev };
+        for (const [id, ings] of entries) next[id] = ings;
+        return next;
+      }));
+  }, [cart, composites]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const listEntries = useMemo((): ListEntry[] => {
     const q = search.toLowerCase();
